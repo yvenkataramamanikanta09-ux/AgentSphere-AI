@@ -1,0 +1,39 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Credential stores and private key material
+.aws/
+.azure/
+.ssh/
+.netrc
+.pypirc
+credentials/
+credentials.*
+secrets/
+secrets.*
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python environments, caches, and build outputs
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

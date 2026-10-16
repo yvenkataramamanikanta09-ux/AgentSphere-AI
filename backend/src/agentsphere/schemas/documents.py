@@ -1,0 +1,61 @@
+"""Metadata checks do not prove the type or safety of actual file contents."""
+
+from pathlib import PurePath
+from typing import Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+SUPPORTED_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+}
+RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
+}
+
+
+class DocumentMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str = Field(strict=True, min_length=1, max_length=255, examples=["proposal.pdf"])
+    content_type: str = Field(strict=True, min_length=1, max_length=255)
+    size_bytes: int = Field(strict=True, gt=0, description="Declared file size in bytes.")
+
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, value: str) -> str:
+        if value != value.strip() or value.startswith(".") or value.endswith("."):
+            raise ValueError(
+                "Use a filename without surrounding whitespace or leading/trailing dots."
+            )
+        if any(char in '<>:"/\\|?*' or not char.isprintable() for char in value):
+            raise ValueError(
+                "Use a filename, not a path; control and reserved characters are invalid."
+            )
+        if value.split(".", 1)[0].upper() in RESERVED_NAMES:
+            raise ValueError("Reserved device names are not valid filenames.")
+        if PurePath(value).suffix.lower() not in SUPPORTED_CONTENT_TYPES:
+            raise ValueError("Supported extensions are .pdf, .docx, .txt, .md, and .markdown.")
+        return value
+
+    @field_validator("content_type")
+    @classmethod
+    def normalize_content_type(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @model_validator(mode="after")
+    def validate_content_type(self) -> Self:
+        extension = PurePath(self.filename).suffix.lower()
+        expected = SUPPORTED_CONTENT_TYPES[extension]
+        if self.content_type != expected:
+            raise ValueError(f"The declared content_type for {extension} must be {expected}.")
+        return self
+
+
+class DocumentValidationResponse(BaseModel):
+    valid: Literal[True] = True
+    document: DocumentMetadata
+    max_upload_bytes: int
