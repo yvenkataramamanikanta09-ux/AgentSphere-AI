@@ -22,6 +22,7 @@ service-account*.json
 # Python environments, caches, and build outputs
 .venv/
 .tools/
+.local/
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -1,9 +1,13 @@
 """Metadata checks do not prove the type or safety of actual file contents."""
 
+from datetime import datetime
 from pathlib import PurePath
 from typing import Literal, Self
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from agentsphere.models import DocumentStatus
 
 SUPPORTED_CONTENT_TYPES = {
     ".pdf": "application/pdf",
@@ -59,3 +63,38 @@ class DocumentValidationResponse(BaseModel):
     valid: Literal[True] = True
     document: DocumentMetadata
     max_upload_bytes: int
+
+
+class DocumentRead(DocumentMetadata):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    status: DocumentStatus
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentUpdate(BaseModel):
+    """PATCH fields are optional, but explicitly supplying null is invalid."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str | None = Field(default=None, strict=True, min_length=1, max_length=255)
+    content_type: str | None = Field(default=None, strict=True, min_length=1, max_length=255)
+    size_bytes: int | None = Field(default=None, strict=True, gt=0)
+    status: DocumentStatus | None = None
+
+    @model_validator(mode="after")
+    def validate_patch(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("Provide at least one field to update.")
+        if any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("Updated fields cannot be null.")
+        return self
+
+
+class DocumentPage(BaseModel):
+    items: list[DocumentRead]
+    limit: int
+    offset: int
+    has_more: bool

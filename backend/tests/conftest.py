@@ -7,7 +7,9 @@ from agentsphere.main import create_app
 
 @pytest.fixture
 def client():
-    settings = Settings(_env_file=None, max_upload_bytes=10_000_000)
+    settings = Settings(
+        _env_file=None, max_upload_bytes=10_000_000, database_url=None, test_database_url=None
+    )
     with TestClient(create_app(settings)) as test_client:
         yield test_client
 
