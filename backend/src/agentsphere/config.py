@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from agentsphere.storage import validate_storage_root
+
 # Resolve relative to this file so starting from another directory is safe.
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -25,6 +27,7 @@ class Settings(BaseSettings):
     max_upload_bytes: int = Field(default=10_000_000, gt=0)
     database_url: SecretStr | None = None
     test_database_url: SecretStr | None = None
+    private_storage_root: Path = BACKEND_DIR / ".local" / "private_storage"
     environment: Literal["development", "production"] = "development"
     app_origin: str = "https://localhost:8443"
     allow_insecure_local_http: bool = False
@@ -36,6 +39,11 @@ class Settings(BaseSettings):
     login_ip_limit: int = Field(default=30, ge=1)
     registration_ip_limit: int = Field(default=5, ge=1)
     csrf_ip_limit: int = Field(default=60, ge=1)
+
+    @field_validator("private_storage_root", mode="before")
+    @classmethod
+    def validate_private_storage(cls, value: str | Path) -> Path:
+        return validate_storage_root(value)
 
     @model_validator(mode="after")
     def validate_security(self):

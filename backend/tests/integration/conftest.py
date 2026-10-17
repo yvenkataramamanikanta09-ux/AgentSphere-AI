@@ -1,5 +1,6 @@
 """Real PostgreSQL, isolated schemas, real cookie/CSRF authentication."""
 
+import re
 from contextlib import ExitStack
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -10,6 +11,7 @@ from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.schema import CreateSchema, DropSchema
 
@@ -26,19 +28,54 @@ def migration_config(connection):
     return config
 
 
+def validate_test_database_url(test_url: str, development_url: str | None = None) -> None:
+    """Fail closed before connecting to a dedicated, local integration database."""
+    try:
+        url = make_url(test_url)
+        port = url.port if url.port is not None else 5432
+    except (ArgumentError, TypeError, ValueError):
+        raise ValueError("TEST_DATABASE_URL must be a valid PostgreSQL URL.") from None
+    if url.drivername != "postgresql+psycopg":
+        raise ValueError("TEST_DATABASE_URL must use postgresql+psycopg.")
+    if url.query:
+        raise ValueError("TEST_DATABASE_URL must not contain query parameters.")
+    if url.host not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("TEST_DATABASE_URL must use an explicit loopback host.")
+    # A plain database identifier also excludes libpq connection-string values.
+    if not url.database or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*_test", url.database):
+        raise ValueError("TEST_DATABASE_URL must name a dedicated database ending in _test.")
+    if not 1 <= port <= 65535:
+        raise ValueError("TEST_DATABASE_URL must use a valid port.")
+    if development_url is None:
+        return
+    try:
+        app_url = make_url(development_url)
+        app_port = app_url.port if app_url.port is not None else 5432
+    except (ArgumentError, TypeError, ValueError):
+        raise ValueError("Development database URL must be valid for the safety check.") from None
+    # Query parameters can override database/host/port; do not guess their destination.
+    if app_url.query:
+        raise ValueError("Development database URL must not contain query parameters in tests.")
+    # Treat all hosts as potential aliases when the name and port match. Refusing an
+    # ambiguous configuration is safer than trusting DNS or localhost spelling.
+    if (url.database, port) == (app_url.database, app_port):
+        raise ValueError("Development and test databases must be different.")
+
+
 @pytest.fixture(scope="session")
 def pg_engine():
     settings = Settings()
     if settings.test_database_url is None:
         pytest.skip("Set TEST_DATABASE_URL to run PostgreSQL integration tests.")
-    url = make_url(settings.test_database_url.get_secret_value())
-    if not url.database.endswith("_test"):
-        pytest.fail("TEST_DATABASE_URL must name a dedicated database ending in _test.")
-    if settings.database_url is not None:
-        app_url = make_url(settings.database_url.get_secret_value())
-        if (url.host, url.port, url.database) == (app_url.host, app_url.port, app_url.database):
-            pytest.fail("Development and test databases must be different.")
-    engine = build_engine(settings.test_database_url.get_secret_value())
+    test_url = settings.test_database_url.get_secret_value()
+    development_url = (
+        settings.database_url.get_secret_value() if settings.database_url is not None else None
+    )
+    try:
+        validate_test_database_url(test_url, development_url)
+    except ValueError as error:
+        pytest.fail(str(error), pytrace=False)
+    engine = build_engine(test_url)
     yield engine
     engine.dispose()
 
