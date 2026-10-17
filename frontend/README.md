@@ -1,9 +1,11 @@
-# AgentSphere AI frontend — Module 4, Stage 2
+# AgentSphere AI frontend — Module 4, Stage 3
 
 React + TypeScript authentication UI connected to the real FastAPI Module 3 API.
 The app contains registration, login, session restoration, logout, and the
-workspace dashboard. See [the Stage 2 guide](../docs/MODULE4_STAGE2.md) for
-workspace selection, creation, roles, architecture, and real API verification.
+workspace dashboard and workspace-scoped document metadata library. See
+[the Stage 3 guide](../docs/MODULE4_STAGE3.md) for document operations, permissions,
+tests, and real API verification. The [Stage 2 guide](../docs/MODULE4_STAGE2.md)
+explains workspace selection and creation. Actual file uploads are not included.
 
 ## Local development
 

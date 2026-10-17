@@ -24,6 +24,7 @@ function mount(route = '/') {
 }
 function backend(workspaces: Workspace[] = [research, shared], override?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined) {
   const fetcher = vi.fn((path: string, init?: RequestInit) => {
+    if (path.includes('/documents?')) return Promise.resolve(json({ items: [], limit: 10, offset: 0, has_more: false }))
     const custom = override?.(path, init)
     if (custom) return Promise.resolve(custom)
     if (path === '/api/v1/auth/me') return Promise.resolve(json(user))
@@ -41,7 +42,8 @@ beforeEach(() => { clearCsrf(); vi.unstubAllGlobals() })
 
 it('shows loading while the workspace list is pending', async () => {
   let complete: (value: Response) => void = () => {}
-  backend([], (path) => path.startsWith('/api/v1/workspaces?') ? new Promise<Response>((resolve) => { complete = resolve }) : undefined)
+  const pending = new Promise<Response>((resolve) => { complete = resolve })
+  backend([], (path) => path.startsWith('/api/v1/workspaces?') ? pending : undefined)
   mount()
   expect(await screen.findByText('Loading workspaces…')).toBeInTheDocument()
   await act(async () => { complete(page([])) })
@@ -57,7 +59,7 @@ it.each([
   expect(screen.getAllByText(user.email).length).toBeGreaterThan(0)
   expect(screen.getByRole('button', { name: 'Select Research' })).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getAllByText(role).length).toBeGreaterThan(0)
-  expect(screen.queryByRole('link', { name: 'Documents' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Documents' })).toBeInTheDocument()
 })
 
 it('changes selection and uses the selected workspace role and URL', async () => {

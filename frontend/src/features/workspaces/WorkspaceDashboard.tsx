@@ -6,6 +6,7 @@ import { CreateWorkspaceForm } from './CreateWorkspaceForm'
 import { useWorkspaces } from './useWorkspaces'
 import type { Workspace } from '../../api/client'
 import './dashboard.css'
+import { DocumentLibrary } from '../documents/DocumentLibrary'
 
 const permissions = {
   owner: { title: 'Ownership & access', description: 'You own this workspace. Your role permits reading and editing document records and managing membership.', label: 'Full workspace access' },
@@ -65,6 +66,7 @@ function DashboardContent() {
       <nav aria-label="Main navigation" onClick={() => setMenuOpen(false)}>
         <a {...navigation('#overview')}><span aria-hidden="true">◫</span>Overview</a>
         <a {...navigation('#workspace-list')}><span aria-hidden="true">▦</span>Workspaces</a>
+        {data.active && <a {...navigation('#document-library')}><span aria-hidden="true">▤</span>Documents</a>}
         {access && <a {...navigation('#workspace-access')}><span aria-hidden="true">◇</span>{access.title}</a>}
         <a {...navigation('#profile')}><span aria-hidden="true">○</span>My profile</a>
       </nav>
@@ -110,6 +112,7 @@ function DashboardContent() {
       </section>
 
       {data.active && access && <section className="permissions-panel panel" id="workspace-access" aria-labelledby="permissions-title"><span className="permission-symbol" aria-hidden="true">◇</span><div><h2 id="permissions-title">{access.title}</h2><p>{access.description}</p></div><RoleBadge role={data.active.role} /></section>}
+      {data.active && <DocumentLibrary key={`${data.active.id}:${data.active.role}`} workspace={data.active} checkingAccess={data.checkingAccess} onPermissionFailure={data.reload} />}
       <footer className="dashboard-footer"><span>AgentSphere AI</span><span>Your workspace. Your access.</span></footer>
     </main>
   </div>

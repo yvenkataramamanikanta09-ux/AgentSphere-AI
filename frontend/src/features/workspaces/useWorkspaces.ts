@@ -99,7 +99,9 @@ export function useWorkspaces() {
   }
 
   const matchesSelection = selectedId && selection.id === selectedId && selection.revision === revision
-  const active = matchesSelection ? selection.workspace : null
+  // Preserve drafts during a recheck of the same workspace; writes pause until verified.
+  const active = selectedId && selection.id === selectedId ? selection.workspace : null
   const selectionError = matchesSelection ? selection.error : null
-  return { items, loading, loadingMore, hasMore, error, active, selectedId, selectionError, select, reload, loadMore }
+  const checkingAccess = !!selectedId && !matchesSelection
+  return { items, loading, loadingMore, hasMore, error, active, selectedId, selectionError, checkingAccess, select, reload, loadMore }
 }
