@@ -1,8 +1,9 @@
-# AgentSphere AI frontend — Module 4, Stage 1
+# AgentSphere AI frontend — Module 4, Stage 2
 
 React + TypeScript authentication UI connected to the real FastAPI Module 3 API.
-This stage contains registration, login, session restoration, and logout. The
-signed-in screen is an account confirmation; workspace features follow in Stage 2.
+The app contains registration, login, session restoration, logout, and the
+workspace dashboard. See [the Stage 2 guide](../docs/MODULE4_STAGE2.md) for
+workspace selection, creation, roles, architecture, and real API verification.
 
 ## Local development
 

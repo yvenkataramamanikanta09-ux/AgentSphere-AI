@@ -32,6 +32,13 @@ interface ValidationIssue {
 
 let csrfToken: string | null = null
 let csrfRequest: Promise<string> | null = null
+let csrfGeneration = 0
+const sessionExpiryListeners = new Set<() => void>()
+
+export function onSessionExpired(listener: () => void): () => void {
+  sessionExpiryListeners.add(listener)
+  return () => { sessionExpiryListeners.delete(listener) }
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -65,7 +72,7 @@ function messageForStatus(status: number): string {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase()
   const headers = new Headers(init.headers)
   if (init.body) headers.set('Content-Type', 'application/json')
@@ -82,7 +89,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       credentials: 'same-origin',
       cache: 'no-store',
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') throw error
     throw new ApiError(0, 'Cannot reach the server. Check your connection and try again.')
   }
 
@@ -96,24 +104,34 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         if (typeof field === 'string') fields[field] = issue.msg ?? 'Invalid value.'
       }
     }
-    if (response.status === 401 || response.status === 403) csrfToken = null
+    if (response.status === 401 || response.status === 403) clearCsrf()
+    if (response.status === 401 && path !== '/api/v1/auth/login') {
+      sessionExpiryListeners.forEach((listener) => listener())
+    }
     throw new ApiError(response.status, messageForStatus(response.status), fields, response.headers.get('Retry-After') ?? undefined)
   }
   if (response.status === 204) return undefined as T
   return response.json() as Promise<T>
 }
 
-export function clearCsrf(): void { csrfToken = null }
+export function clearCsrf(): void {
+  csrfToken = null
+  csrfRequest = null
+  csrfGeneration += 1
+}
 
 export function obtainCsrf(): Promise<string> {
   if (csrfToken) return Promise.resolve(csrfToken)
   if (!csrfRequest) {
-    csrfRequest = request<{ csrf_token: string }>('/api/v1/auth/csrf')
+    const generation = csrfGeneration
+    const pending = request<{ csrf_token: string }>('/api/v1/auth/csrf')
       .then((data) => {
+        if (generation !== csrfGeneration) throw new ApiError(403, 'Your session changed. Please try again.')
         csrfToken = data.csrf_token
         return data.csrf_token
       })
-      .finally(() => { csrfRequest = null })
+      .finally(() => { if (csrfRequest === pending) csrfRequest = null })
+    csrfRequest = pending
   }
   return csrfRequest
 }
@@ -125,6 +143,7 @@ export const authApi = {
     const result = await request<LoginResult>('/api/v1/auth/login', {
       method: 'POST', body: JSON.stringify({ email, password }),
     })
+    clearCsrf()
     csrfToken = result.csrf_token // The anonymous token is invalid after login.
     return result.user
   },

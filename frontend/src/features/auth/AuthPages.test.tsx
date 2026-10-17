@@ -40,6 +40,7 @@ it('submits login and replaces the anonymous CSRF token', async () => {
     .mockResolvedValueOnce(json({ detail: 'Authentication required.' }, 401))
     .mockResolvedValueOnce(json({ csrf_token: 'anonymous-token' }))
     .mockResolvedValueOnce(json({ user, csrf_token: 'rotated-token', expires_at: '2026-10-17T12:00:00Z' }))
+    .mockResolvedValueOnce(json({ items: [], limit: 20, offset: 0, has_more: false }))
   vi.stubGlobal('fetch', fetcher)
   render(<MemoryRouter initialEntries={['/login']}><App /></MemoryRouter>)
   await screen.findByRole('heading', { name: 'Sign in to your account' })
@@ -47,7 +48,8 @@ it('submits login and replaces the anonymous CSRF token', async () => {
   await userEvent.type(screen.getByLabelText('Password'), 'A long example passphrase')
   await userEvent.click(screen.getByRole('button', { name: /^Sign in/ }))
   expect(await screen.findByRole('heading', { name: 'Welcome, Person.' })).toBeInTheDocument()
-  expect(fetcher).toHaveBeenCalledTimes(3)
+  await screen.findByText('No workspaces yet')
+  expect(fetcher).toHaveBeenCalledTimes(4)
 })
 
 it('restores an authenticated session and its CSRF token on reload', async () => {
@@ -55,10 +57,12 @@ it('restores an authenticated session and its CSRF token on reload', async () =>
   const fetcher = vi.fn()
     .mockResolvedValueOnce(json(user))
     .mockResolvedValueOnce(json({ csrf_token: 'existing-session-token' }))
+    .mockResolvedValueOnce(json({ items: [], limit: 20, offset: 0, has_more: false }))
   vi.stubGlobal('fetch', fetcher)
   render(<MemoryRouter initialEntries={['/']}><App /></MemoryRouter>)
   expect(await screen.findByRole('heading', { name: 'Welcome, Person.' })).toBeInTheDocument()
-  expect(fetcher.mock.calls.map(([path]) => path)).toEqual(['/api/v1/auth/me', '/api/v1/auth/csrf'])
+  await screen.findByText('No workspaces yet')
+  expect(fetcher.mock.calls.map(([path]) => path)).toEqual(['/api/v1/auth/me', '/api/v1/auth/csrf', '/api/v1/workspaces?limit=20&offset=0'])
 })
 
 it('returns to sign-in after registration because registration does not log in', async () => {
