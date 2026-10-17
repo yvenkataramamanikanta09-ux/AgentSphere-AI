@@ -2,20 +2,15 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agentsphere.config import Settings
-from agentsphere.main import create_app
 from agentsphere.models import Document
 
 pytestmark = pytest.mark.postgres
-URL = "/api/v1/documents"
 
 
 def create(client, metadata):
-    response = client.post(URL, json=metadata)
+    response = client.post(client.documents_url, json=metadata)
     assert response.status_code == 201, response.text
     return response
 
@@ -45,6 +40,7 @@ def test_crud_lifecycle(db_client, metadata):
 
 
 def test_listing_pagination_and_status_filter(db_client, metadata):
+    URL = db_client.documents_url
     ids = [create(db_client, metadata).json()["id"] for _ in range(3)]
     first = db_client.get(URL, params={"limit": 2}).json()
     assert len(first["items"]) == 2 and first["has_more"] is True
@@ -61,11 +57,13 @@ def test_listing_pagination_and_status_filter(db_client, metadata):
     "params", [{"limit": 0}, {"limit": 101}, {"offset": -1}, {"status": "uploaded"}]
 )
 def test_invalid_list_parameters(db_client, params):
+    URL = db_client.documents_url
     assert db_client.get(URL, params=params).status_code == 422
 
 
 @pytest.mark.parametrize("method", ["get", "patch", "delete"])
 def test_missing_and_malformed_ids(db_client, method):
+    URL = db_client.documents_url
     kwargs = {"json": {"status": "archived"}} if method == "patch" else {}
     assert getattr(db_client, method)(f"{URL}/{uuid4()}", **kwargs).status_code == 404
     assert getattr(db_client, method)(f"{URL}/not-a-uuid", **kwargs).status_code == 422
@@ -83,6 +81,7 @@ def test_missing_and_malformed_ids(db_client, method):
     ],
 )
 def test_invalid_creation_leaves_no_row(db_client, metadata, change, expected):
+    URL = db_client.documents_url
     assert db_client.post(URL, json=metadata | change).status_code == expected
     assert db_client.get(URL).json()["items"] == []
 
@@ -101,6 +100,7 @@ def test_invalid_creation_leaves_no_row(db_client, metadata, change, expected):
     ],
 )
 def test_invalid_patch_does_not_change_row(db_client, metadata, patch, expected):
+    URL = db_client.documents_url
     before = create(db_client, metadata).json()
     location = f"{URL}/{before['id']}"
     assert db_client.patch(location, json=patch).status_code == expected
@@ -108,6 +108,7 @@ def test_invalid_patch_does_not_change_row(db_client, metadata, patch, expected)
 
 
 def test_patch_validates_merged_fields_and_normalizes(db_client, metadata):
+    URL = db_client.documents_url
     record = create(db_client, metadata).json()
     response = db_client.patch(
         f"{URL}/{record['id']}", json={"filename": "notes.txt", "content_type": " Text/Plain "}
@@ -123,33 +124,22 @@ def test_ten_mb_boundary_and_duplicate_names(db_client, metadata):
     assert first["id"] != second["id"]
 
 
-def test_persistence_across_app_instances_and_timestamp_update(pg_engine, metadata):
-    # This test deliberately commits; finally deletes only its own generated row.
-    settings = Settings()
-    app_settings = Settings(
-        _env_file=None,
-        database_url=settings.test_database_url,
-        test_database_url=None,
-        max_upload_bytes=10_000_000,
+def test_persistence_across_app_instances_and_timestamp_update(client_factory, db_env, metadata):
+    from conftest import register_and_login
+
+    first = register_and_login(client_factory())
+    record = create(first, metadata).json()
+    record_id = UUID(record["id"])
+    second = client_factory()
+    second.cookies.update(first.cookies)
+    second.headers["X-CSRF-Token"] = first.headers["X-CSRF-Token"]
+    location = f"{first.documents_url}/{record_id}"
+    first.close()
+    assert second.get(location).json() == record
+    changed = second.patch(location, json={"status": "archived"}).json()
+    assert datetime.fromisoformat(changed["updated_at"]) > datetime.fromisoformat(
+        record["updated_at"]
     )
-    record_id = None
-    try:
-        with TestClient(create_app(app_settings)) as first:
-            record = create(first, metadata).json()
-            record_id = UUID(record["id"])
-        with TestClient(create_app(app_settings)) as second:
-            assert second.get(f"{URL}/{record_id}").json() == record
-            changed = second.patch(f"{URL}/{record_id}", json={"status": "archived"}).json()
-            assert datetime.fromisoformat(changed["updated_at"]) > datetime.fromisoformat(
-                record["updated_at"]
-            )
-            assert changed["created_at"] == record["created_at"]
-        with Session(pg_engine) as session:
-            row = session.scalar(select(Document).where(Document.id == record_id))
-            assert row.status.value == "archived"
-    finally:
-        if record_id is not None:
-            with Session(pg_engine) as session, session.begin():
-                row = session.get(Document, record_id)
-                if row is not None:
-                    session.delete(row)
+    assert changed["created_at"] == record["created_at"]
+    with Session(db_env) as session:
+        assert session.get(Document, record_id).status.value == "archived"

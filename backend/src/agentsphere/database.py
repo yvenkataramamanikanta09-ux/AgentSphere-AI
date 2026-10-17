@@ -33,7 +33,10 @@ def get_session(request: Request) -> Iterator[Session]:
         raise HTTPException(status_code=503, detail="Database is not configured.")
     with factory() as session:
         try:
-            yield session
+            # One transaction shared by authentication, authorization, and route work.
+            # Callers use Depends(scope="function") so commit precedes the response.
+            with session.begin():
+                yield session
         except SQLAlchemyError as error:
             session.rollback()
             # Do not expose connection URLs, SQL parameters, or driver exception text.

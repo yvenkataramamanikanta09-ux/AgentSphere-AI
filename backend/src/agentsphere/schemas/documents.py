@@ -69,6 +69,7 @@ class DocumentRead(DocumentMetadata):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    workspace_id: UUID
     status: DocumentStatus
     created_at: datetime
     updated_at: datetime

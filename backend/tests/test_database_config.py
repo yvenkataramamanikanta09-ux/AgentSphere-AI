@@ -28,7 +28,7 @@ def test_database_url_is_redacted():
 def test_no_database_preserves_module_one(client, metadata):
     assert client.get("/health/live").json() == {"status": "ok"}
     assert client.post("/api/v1/documents/validate", json=metadata).status_code == 200
-    response = client.get("/api/v1/documents")
+    response = client.get("https://localhost:8443/api/v1/auth/me")
     assert response.status_code == 503
     assert response.json() == {"detail": "Database is not configured."}
 
@@ -43,7 +43,10 @@ def test_unreachable_database_is_sanitized(metadata):
     with TestClient(create_app(settings)) as client:
         assert client.get("/health/live").status_code == 200
         assert client.post("/api/v1/documents/validate", json=metadata).status_code == 200
-        response = client.get("/api/v1/documents")
+        response = client.get(
+            "https://localhost:8443/api/v1/auth/me",
+            headers={"Cookie": "__Host-agentsphere_session=" + "a" * 43},
+        )
         assert response.status_code == 503
         assert "example-password" not in response.text
         assert "SELECT" not in response.text
