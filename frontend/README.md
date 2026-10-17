@@ -1,4 +1,4 @@
-# AgentSphere AI frontend — Module 4, Stage 3
+# AgentSphere AI frontend — Module 4, Stage 4
 
 React + TypeScript authentication UI connected to the real FastAPI Module 3 API.
 The app contains registration, login, session restoration, logout, and the
@@ -6,6 +6,8 @@ workspace dashboard and workspace-scoped document metadata library. See
 [the Stage 3 guide](../docs/MODULE4_STAGE3.md) for document operations, permissions,
 tests, and real API verification. The [Stage 2 guide](../docs/MODULE4_STAGE2.md)
 explains workspace selection and creation. Actual file uploads are not included.
+See [the Stage 4 guide](../docs/MODULE4_STAGE4.md) for the complete user workflow,
+accessibility improvements, and Playwright tests against the real local application.
 
 ## Local development
 
@@ -62,7 +64,19 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run test:e2e
 ```
 
 Unit tests use controlled HTTP responses to check client behavior; the application
 does not use mock data. The documented local run connects to FastAPI and PostgreSQL.
+
+The E2E command requires the existing local PostgreSQL cluster and its ignored
+configuration. It creates a unique disposable database, applies migrations,
+starts test servers on ports 8002 and 5174, runs 53 live API checks and 17 browser
+tests, then removes only that database and stops those servers. The development
+database and development servers are not used by these tests. Installed Chrome
+is selected automatically at its standard Windows path; otherwise install the
+Playwright browser with `npx playwright install chromium`. Reports and screenshots
+are ignored under `.local/e2e/`. Session traces are disabled, but HTML action
+labels can contain generated disposable passwords. Keep these reports local and
+excluded from Git; their accounts are removed with the disposable database.

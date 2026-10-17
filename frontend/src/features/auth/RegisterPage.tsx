@@ -33,7 +33,7 @@ export function RegisterPage() {
   }
 
   return <AuthLayout>
-    <div className="auth-head"><span className="section-label">GET STARTED</span><h2>Create your account</h2><p>Your personal workspace will be ready after you register.</p></div>
+    <div className="auth-head"><span className="section-label">GET STARTED</span><h1 tabIndex={-1}>Create your account</h1><p>Your personal workspace will be ready after you register.</p></div>
     {serverError && <div className="notice error" role="alert">{serverError}</div>}
     <form onSubmit={handleSubmit(submit)} noValidate>
       <div className="field"><label htmlFor="register-name">Full name</label><input id="register-name" autoComplete="name" placeholder="Your name" aria-invalid={!!errors.display_name} aria-describedby={errors.display_name ? 'register-name-error' : undefined} {...register('display_name')} />{errors.display_name && <small id="register-name-error" role="alert">{errors.display_name.message}</small>}</div>

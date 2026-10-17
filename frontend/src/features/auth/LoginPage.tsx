@@ -35,7 +35,7 @@ export function LoginPage() {
   }
 
   return <AuthLayout>
-    <div className="auth-head"><span className="section-label">WELCOME BACK</span><h2>Sign in to your account</h2><p>Pick up where your work left off.</p></div>
+    <div className="auth-head"><span className="section-label">WELCOME BACK</span><h1 tabIndex={-1}>Sign in to your account</h1><p>Pick up where your work left off.</p></div>
     {registered && <div className="notice success" role="status">Your account is ready. Sign in to continue.</div>}
     {restoreError && <div className="notice error" role="alert">{restoreError}</div>}
     {serverError && <div className="notice error" role="alert">{serverError}</div>}

@@ -11,6 +11,9 @@ node_modules
 dist
 dist-ssr
 *.local
+playwright-report/
+test-results/
+blob-report/
 
 # Unused images from the Vite starter template; the app uses CSS artwork.
 src/assets/hero.png

@@ -14,7 +14,7 @@ export function AuthLayout({ children }: { children: ReactNode }) {
       <div className="story-top"><Brand /><span className="story-version">WORKSPACE ACCESS / 01</span></div>
       <div className="story-main">
         <div className="eyebrow"><span className="eyebrow-line" /> YOUR RESEARCH, ORGANIZED</div>
-        <h1>A clearer way<br />to <em>work together.</em></h1>
+        <h2>A clearer way<br />to <em>work together.</em></h2>
         <p>One secure place for your team, workspaces, and document records.</p>
         <div className="orbit-art" aria-hidden="true"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="orbit orbit-three" /><div className="orbit-core"><span className="brand-mark"><span /><span /><span /><span /></span></div><i className="orbit-dot dot-one" /><i className="orbit-dot dot-two" /><i className="orbit-dot dot-three" /></div>
       </div>

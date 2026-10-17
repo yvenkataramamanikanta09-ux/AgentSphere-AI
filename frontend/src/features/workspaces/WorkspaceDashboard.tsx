@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { Brand } from '../auth/AuthLayout'
 import { useAuth } from '../auth/context'
@@ -32,6 +32,22 @@ function DashboardContent() {
   const [notice, setNotice] = useState<string | null>(null)
   const [logoutError, setLogoutError] = useState<string | null>(null)
   const [signingOut, setSigningOut] = useState(false)
+  const createButton = useRef<HTMLButtonElement>(null)
+  const menuButton = useRef<HTMLButtonElement>(null)
+  const sidebar = useRef<HTMLElement>(null)
+  const wasCreating = useRef(false)
+  useEffect(() => {
+    if (wasCreating.current && !creating) createButton.current?.focus()
+    wasCreating.current = creating
+  }, [creating])
+  useEffect(() => {
+    if (menuOpen) sidebar.current?.querySelector<HTMLElement>('a.nav-item')?.focus()
+  }, [menuOpen])
+
+  function closeMenu(returnFocus = true) {
+    setMenuOpen(false)
+    if (menuOpen && returnFocus) requestAnimationFrame(() => menuButton.current?.focus())
+  }
   const access = data.active ? permissions[data.active.role] : null
   const currentSection = hash || '#overview'
   const navigation = (target: string) => ({
@@ -60,10 +76,18 @@ function DashboardContent() {
 
   return <div className="dashboard-shell">
     <a className="skip-link" href="#dashboard-content">Skip to content</a>
-    <aside className={`dashboard-sidebar ${menuOpen ? 'menu-open' : ''}`} id="dashboard-navigation">
+    <aside ref={sidebar} className={`dashboard-sidebar ${menuOpen ? 'menu-open' : ''}`} id="dashboard-navigation" onKeyDown={(event) => { if (event.key === 'Escape' && menuOpen) { event.preventDefault(); closeMenu() } }}>
       <div className="sidebar-brand"><Brand /></div>
       <div className="sidebar-caption">YOUR WORKSPACE</div>
-      <nav aria-label="Main navigation" onClick={() => setMenuOpen(false)}>
+      <nav aria-label="Main navigation" onClick={(event) => {
+        const link = event.target instanceof Element ? event.target.closest('a') : null
+        closeMenu(false)
+        if (link) requestAnimationFrame(() => {
+          const target = document.getElementById(link.hash.slice(1))
+          target?.setAttribute('tabindex', '-1')
+          target?.focus()
+        })
+      }}>
         <a {...navigation('#overview')}><span aria-hidden="true">◫</span>Overview</a>
         <a {...navigation('#workspace-list')}><span aria-hidden="true">▦</span>Workspaces</a>
         {data.active && <a {...navigation('#document-library')}><span aria-hidden="true">▤</span>Documents</a>}
@@ -76,7 +100,7 @@ function DashboardContent() {
     </aside>
 
     <header className="dashboard-topnav">
-      <button className="menu-button" type="button" aria-controls="dashboard-navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? 'Close menu' : 'Menu'}</button>
+      <button ref={menuButton} className="menu-button" type="button" aria-controls="dashboard-navigation" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? 'Close menu' : 'Menu'}</button>
       <div className="dashboard-breadcrumb">Workspace<span>/</span><strong>Overview</strong></div>
       <div className="workspace-picker"><label htmlFor="active-workspace">Active workspace</label><select id="active-workspace" value={data.active?.id ?? ''} onChange={(event) => data.select(event.target.value)} disabled={!pickerItems.length}>
         <option value="" disabled>{data.loading ? 'Loading…' : 'Choose a workspace'}</option>
@@ -85,8 +109,8 @@ function DashboardContent() {
       <a className="topnav-profile user-avatar" href="#profile" aria-label="View your profile">{user?.display_name.slice(0, 1).toUpperCase()}</a>
     </header>
 
-    <main className="dashboard-content" id="dashboard-content">
-      <section className="dashboard-heading" id="overview"><div><span className="section-label">YOUR WORK, IN ONE PLACE</span><h1>Welcome, {user?.display_name}.</h1><p>Choose a workspace and make room for your next project.</p></div><button type="button" className="primary-button" onClick={() => { setCreating(true); setNotice(null) }} disabled={creating}><span aria-hidden="true">＋</span>New workspace</button></section>
+    <main className="dashboard-content" id="dashboard-content" tabIndex={-1}>
+      <section className="dashboard-heading" id="overview"><div><span className="section-label">YOUR WORK, IN ONE PLACE</span><h1 tabIndex={-1}>Welcome, {user?.display_name}.</h1><p>Choose a workspace and make room for your next project.</p></div><button type="button" ref={createButton} className="primary-button" onClick={() => { setCreating(true); setNotice(null) }} disabled={creating}><span aria-hidden="true">＋</span>New workspace</button></section>
       {notice && <div className="dashboard-notice notice success" role="status"><span>{notice}</span><button type="button" aria-label="Dismiss success message" onClick={() => setNotice(null)}>×</button></div>}
       {logoutError && <div className="notice error" role="alert">{logoutError}</div>}
       {creating && <CreateWorkspaceForm onCreated={created} onCancel={() => setCreating(false)} />}
@@ -105,9 +129,9 @@ function DashboardContent() {
         {data.error && <div className="notice error" role="alert">{data.error}<button className="inline-button" type="button" onClick={data.reload}>Try again</button></div>}
         {data.loading ? <><p className="list-loading" role="status">Loading workspaces…</p><div className="workspace-grid" aria-hidden="true"><div className="workspace-skeleton" /><div className="workspace-skeleton" /></div></>
           : !data.error && !data.items.length ? <div className="empty-workspaces panel"><span className="empty-symbol" aria-hidden="true">▦</span><h3>No workspaces yet</h3><p>Create a workspace to get started. You’ll own it and control its access.</p><button className="secondary-button" type="button" onClick={() => setCreating(true)} disabled={creating}>Create your first workspace</button></div>
-            : <div className="workspace-grid">{data.items.map((workspace) => <button type="button" className={`workspace-card panel ${data.active?.id === workspace.id ? 'workspace-card-active' : ''}`} key={workspace.id} onClick={() => data.select(workspace.id)} aria-label={`Select ${workspace.name}`} aria-pressed={data.active?.id === workspace.id}>
-              <div className="workspace-card-top"><span className="card-symbol" aria-hidden="true">{workspace.name.slice(0, 1).toUpperCase()}</span><RoleBadge role={workspace.role} /></div><h3>{workspace.name}</h3><p>Created {dateLabel(workspace.created_at)}</p><div className="workspace-card-bottom"><span>{data.active?.id === workspace.id ? 'Selected workspace' : 'Select workspace'}</span><span aria-hidden="true">↗</span></div>
-            </button>)}</div>}
+            : <div className="workspace-grid">{data.items.map((workspace) => <article className={`workspace-card panel ${data.active?.id === workspace.id ? 'workspace-card-active' : ''}`} key={workspace.id}>
+              <div className="workspace-card-top"><span className="card-symbol" aria-hidden="true">{workspace.name.slice(0, 1).toUpperCase()}</span><RoleBadge role={workspace.role} /></div><h3>{workspace.name}</h3><p>Created {dateLabel(workspace.created_at)}</p><button type="button" className="workspace-card-bottom" onClick={() => data.select(workspace.id)} aria-pressed={data.active?.id === workspace.id}><span>Select {workspace.name}</span><span aria-hidden="true">↗</span></button>
+            </article>)}</div>}
         {!data.loading && data.hasMore && <button type="button" className="secondary-button load-more" disabled={data.loadingMore} onClick={data.loadMore}>{data.loadingMore ? 'Loading more…' : 'Load more workspaces'}</button>}
       </section>
 

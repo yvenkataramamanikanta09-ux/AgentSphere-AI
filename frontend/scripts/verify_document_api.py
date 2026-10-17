@@ -6,9 +6,11 @@ Use backend/.venv/Scripts/python.exe. Default: remove all disposable records.
 
 import argparse
 import json
+import os
 import secrets
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 import httpx
@@ -23,7 +25,7 @@ from agentsphere.database import build_engine
 from agentsphere.models import AuthSession, Document, Membership, User, Workspace
 from agentsphere.security import hash_password
 
-ORIGIN = "http://127.0.0.1:5173"
+ORIGIN = os.environ.get("VERIFICATION_ORIGIN", "http://127.0.0.1:5173")
 FIXTURE = Path(__file__).resolve().parents[1] / ".local" / "stage3-fixture.json"
 
 
@@ -62,6 +64,17 @@ def main():
     parser.add_argument("--keep-fixture", action="store_true")
     parser.add_argument("--cleanup", action="store_true")
     args = parser.parse_args()
+    origin = urlsplit(ORIGIN)
+    if (
+        origin.scheme not in {"http", "https"}
+        or origin.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or origin.username
+        or origin.password
+        or origin.path
+        or origin.query
+        or origin.fragment
+    ):
+        raise SystemExit("Verification origin must be a loopback origin without a path.")
     settings = Settings()
     if settings.database_url is None or settings.environment != "development":
         raise SystemExit("An existing local development database is required.")
