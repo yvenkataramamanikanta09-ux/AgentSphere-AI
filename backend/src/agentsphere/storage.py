@@ -10,6 +10,8 @@ import os
 import re
 import stat
 import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -280,6 +282,57 @@ class PrivateStorage:
         except OSError:
             raise StorageError("Private storage object is unavailable.") from None
         return path
+
+    @contextmanager
+    def temporary(self) -> Iterator[BinaryIO]:
+        """Yield an owned private binary scratch file and remove it on every exit.
+
+        The caller enforces request and parsing limits. This helper never uses
+        the process-wide temporary directory or publishes a stored object.
+        """
+        if not self._initialized:
+            raise StorageError("Initialize private storage before creating temporary objects.")
+        temporary = self.root / "tmp" / f"{uuid4().hex}.part"
+        descriptor = None
+        handle = None
+        identity = None
+        created = False
+        try:
+            self._directories(self.root / "tmp")
+            flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(temporary, flags, 0o600)
+            created = True
+            info = os.fstat(descriptor)
+            identity = (info.st_dev, info.st_ino)
+            current = self._regular(temporary)
+            if identity != (current.st_dev, current.st_ino):
+                raise StorageError("Private temporary object changed unexpectedly.")
+            handle = os.fdopen(descriptor, "w+b")
+            descriptor = None  # The binary handle owns the descriptor from here.
+            yield handle
+        except OSError:
+            raise StorageError("Could not access private temporary object.") from None
+        finally:
+            cleanup_failed = False
+            try:
+                if handle is not None:
+                    handle.close()
+                elif descriptor is not None:
+                    os.close(descriptor)
+            except OSError:
+                cleanup_failed = True
+            if created:
+                try:
+                    self._directories(self.root / "tmp")
+                    current = self._regular(temporary)
+                    if identity is not None and identity != (current.st_dev, current.st_ino):
+                        raise StorageError("Private temporary object changed unexpectedly.")
+                    temporary.unlink()
+                except (OSError, StorageError):
+                    cleanup_failed = True
+            if cleanup_failed:
+                raise StorageError("Could not clean private temporary object.") from None
 
     def put(self, key: str, source: BinaryIO, *, max_bytes: int) -> StoredObject:
         """Copy bounded bytes to a new immutable object; never replace an existing key."""

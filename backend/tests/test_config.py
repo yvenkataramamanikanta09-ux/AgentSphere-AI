@@ -23,3 +23,17 @@ def test_invalid_environment_configuration(monkeypatch, value):
     monkeypatch.setenv("MAX_UPLOAD_BYTES", value)
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("upload_timeout_seconds", 0),
+        ("upload_timeout_seconds", 601),
+        ("upload_concurrency", 0),
+        ("upload_concurrency", 9),
+    ],
+)
+def test_upload_resource_controls_are_bounded(name, value):
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **{name: value})

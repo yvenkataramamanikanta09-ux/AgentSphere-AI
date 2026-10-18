@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     database_url: SecretStr | None = None
     test_database_url: SecretStr | None = None
     private_storage_root: Path = BACKEND_DIR / ".local" / "private_storage"
+    upload_timeout_seconds: int = Field(default=120, ge=1, le=600)
+    upload_concurrency: int = Field(default=2, ge=1, le=8)
     environment: Literal["development", "production"] = "development"
     app_origin: str = "https://localhost:8443"
     allow_insecure_local_http: bool = False

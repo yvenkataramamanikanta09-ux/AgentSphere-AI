@@ -1,6 +1,8 @@
 """Assemble the application; keep endpoint behavior in the API modules."""
 
+import asyncio
 from contextlib import asynccontextmanager
+from threading import Lock
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -8,7 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
-from agentsphere.api import auth, document_records, documents, health, workspaces
+from agentsphere.api import auth, document_files, document_records, documents, health, workspaces
 from agentsphere.config import Settings
 from agentsphere.database import build_engine
 from agentsphere.middleware import SecurityMiddleware
@@ -38,12 +40,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application = FastAPI(
         title="AgentSphere AI",
         version="0.3.0",
-        description="Validate and persist document metadata. No document uploads or AI processing.",
+        description=(
+            "Document metadata and private uploads. Processing jobs are queued; no worker or AI."
+        ),
         lifespan=lifespan,
     )
     application.state.settings = configuration
     application.state.session_factory = None
     application.state.clock = utcnow
+    application.state.private_storage = None
+    application.state.private_storage_lock = Lock()
+    application.state.upload_slots = asyncio.Semaphore(configuration.upload_concurrency)
     application.add_middleware(SecurityMiddleware)
 
     @application.exception_handler(RequestValidationError)
@@ -68,5 +75,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(documents.router)
     application.include_router(auth.router)
     application.include_router(workspaces.router)
+    application.include_router(document_files.router)
     application.include_router(document_records.router)
     return application

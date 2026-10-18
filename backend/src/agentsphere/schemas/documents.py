@@ -7,7 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from agentsphere.models import DocumentStatus
+from agentsphere.models import DocumentStatus, ProcessingStatus
 
 SUPPORTED_CONTENT_TYPES = {
     ".pdf": "application/pdf",
@@ -99,3 +99,25 @@ class DocumentPage(BaseModel):
     limit: int
     offset: int
     has_more: bool
+
+
+class FileRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    document_id: UUID
+    original_filename: str
+    sha256: str
+    uploaded_by: UUID
+    uploaded_at: datetime
+    processing_status: ProcessingStatus
+    processed_at: datetime | None
+    error_code: str | None
+    warning_code: str | None
+    download_available: bool = False
+
+
+class UploadRead(BaseModel):
+    document: DocumentRead
+    file: FileRead
+    replayed: bool = False

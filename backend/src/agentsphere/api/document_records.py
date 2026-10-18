@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from agentsphere.config import Settings, get_settings
-from agentsphere.models import Document, DocumentStatus
+from agentsphere.document_lifecycle import queue_file_deletion, storage_schema_available
+from agentsphere.models import Document, DocumentFile, DocumentStatus
 from agentsphere.permissions import Access, Editor
 from agentsphere.schemas.documents import (
     DocumentMetadata,
@@ -17,7 +18,7 @@ from agentsphere.schemas.documents import (
     DocumentRead,
     DocumentUpdate,
 )
-from agentsphere.security import DatabaseSession
+from agentsphere.security import DatabaseSession, now
 
 router = APIRouter(
     prefix="/api/v1/workspaces/{workspace_id}/documents",
@@ -123,6 +124,15 @@ def update_document(
     """Update selected fields, validating the complete resulting metadata together."""
     document = find_document(session, document_id, access.workspace.id, lock=True)
     changes = patch.model_dump(exclude_unset=True)
+    if storage_schema_available(session):
+        attached = session.scalar(
+            select(DocumentFile.id).where(DocumentFile.document_id == document.id)
+        )
+        if attached is not None and any(
+            field in changes and changes[field] != getattr(document, field)
+            for field in ("size_bytes", "content_type")
+        ):
+            raise HTTPException(409, "Uploaded file size and content type are server controlled.")
     current = {
         "filename": document.filename,
         "content_type": document.content_type,
@@ -148,7 +158,11 @@ def update_document(
 
 
 @router.delete("/{document_id}", status_code=204, responses={404: {"description": "Not found."}})
-def delete_document(document_id: UUID, session: DatabaseSession, access: Editor) -> Response:
-    """Permanently delete this metadata row; no document file exists in Module 2."""
-    session.delete(find_document(session, document_id, access.workspace.id, lock=True))
+def delete_document(
+    document_id: UUID, request: Request, session: DatabaseSession, access: Editor
+) -> Response:
+    """Remove visibility now; retain durable cleanup work for a later worker."""
+    document = find_document(session, document_id, access.workspace.id, lock=True)
+    queue_file_deletion(session, document, now(request))
+    session.delete(document)
     return Response(status_code=204)

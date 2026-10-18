@@ -13,6 +13,7 @@ dependencies = [
     "alembic>=1.15,<2.0",
     "argon2-cffi>=25.1,<26.0",
     "email-validator>=2.2,<3.0",
+    "python-multipart (>=0.0.22,<0.1)",
 ]
 
 [tool.poetry]

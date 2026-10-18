@@ -1,5 +1,6 @@
 """Every filesystem mutation is restricted to pytest's unique temporary directory."""
 
+import asyncio
 import hashlib
 import io
 import os
@@ -336,6 +337,10 @@ def test_directory_links_or_windows_junctions_cannot_escape(tmp_path, position):
                 storage.initialize()
         else:
             key = new_storage_key(workspace if position == "workspace" else uuid4())
+            if position == "temporary":
+                with pytest.raises(StorageError):
+                    with storage.temporary():
+                        pytest.fail("Private scratch files must not follow a junction.")
             with pytest.raises(StorageError):
                 storage.put(key, io.BytesIO(b"x"), max_bytes=1)
         assert not list(outside.iterdir())
@@ -435,3 +440,159 @@ def test_reinitialization_secures_existing_permissive_children(storage):
     else:
         assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_private_temporary_roundtrip_and_cleanup(storage):
+    with storage.temporary() as handle:
+        paths = list((storage.root / "tmp").iterdir())
+        assert len(paths) == 1
+        path = paths[0]
+        assert UUID(hex=path.stem).version == 4
+        assert path.suffix == ".part"
+        assert handle.readable() and handle.writable() and handle.seekable()
+        handle.write(b"private multipart bytes")
+        handle.seek(0)
+        assert handle.read() == b"private multipart bytes"
+        if os.name == "nt":
+            assert ";;;WD)" not in windows_dacl(path)
+        else:
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert handle.closed
+    assert not path.exists()
+    assert not list((storage.root / "tmp").iterdir())
+
+
+def test_temporary_requires_initialization_without_creating_files(tmp_path):
+    root = tmp_path / "uninitialized"
+    storage = PrivateStorage(root)
+    with pytest.raises(StorageError, match="Initialize"):
+        with storage.temporary():
+            pytest.fail("Uninitialized storage must not yield a scratch file.")
+    assert not root.exists()
+
+
+@pytest.mark.parametrize(
+    "error", [ValueError("caller validation failure"), asyncio.CancelledError()]
+)
+def test_temporary_preserves_caller_error_and_cancellation_after_cleanup(storage, error):
+    with pytest.raises(type(error)) as raised:
+        with storage.temporary() as handle:
+            handle.write(b"partial")
+            raise error
+    assert raised.value is error
+    assert handle.closed
+    assert not list((storage.root / "tmp").iterdir())
+
+
+def test_temporary_caller_can_close_upload_file_early(storage):
+    with storage.temporary() as handle:
+        handle.write(b"parser complete")
+        handle.close()
+    assert handle.closed
+    assert not list((storage.root / "tmp").iterdir())
+
+
+def test_temporary_contexts_are_isolated_from_each_other_and_stored_objects(storage):
+    key = new_storage_key(uuid4())
+    storage.put(key, io.BytesIO(b"original"), max_bytes=8)
+    with storage.temporary() as first:
+        first.write(b"first")
+        with storage.temporary() as second:
+            second.write(b"second")
+            assert len(list((storage.root / "tmp").iterdir())) == 2
+        assert second.closed
+        assert len(list((storage.root / "tmp").iterdir())) == 1
+        first.seek(0)
+        assert first.read() == b"first"
+    with storage.open(key) as original:
+        assert original.read() == b"original"
+    assert not list((storage.root / "tmp").iterdir())
+
+
+def test_temporary_creation_collision_does_not_remove_existing_file(storage, monkeypatch):
+    fixed_id = uuid4()
+    existing = storage.root / "tmp" / f"{fixed_id.hex}.part"
+    existing.write_bytes(b"unrelated scratch content")
+    monkeypatch.setattr(storage_module, "uuid4", lambda: fixed_id)
+    with pytest.raises(StorageError):
+        with storage.temporary():
+            pytest.fail("Exclusive creation must not overwrite an existing scratch file.")
+    assert existing.read_bytes() == b"unrelated scratch content"
+
+
+def test_temporary_rejects_unexpected_temporary_directory_object(storage):
+    temporary_directory = storage.root / "tmp"
+    temporary_directory.rmdir()
+    temporary_directory.write_bytes(b"untouched")
+    with pytest.raises(StorageError):
+        with storage.temporary():
+            pytest.fail("A regular file is not a temporary directory.")
+    assert temporary_directory.read_bytes() == b"untouched"
+
+
+@pytest.mark.parametrize("failure", ["open", "fdopen"])
+def test_temporary_setup_failure_is_sanitized_and_owned_file_removed(storage, monkeypatch, failure):
+    def fail(*args, **kwargs):
+        raise OSError("sensitive-temporary-path")
+
+    monkeypatch.setattr(os, failure, fail)
+    with pytest.raises(StorageError) as raised:
+        with storage.temporary():
+            pytest.fail("Scratch setup must fail.")
+    assert "sensitive-temporary-path" not in str(raised.value)
+    assert not list((storage.root / "tmp").iterdir())
+
+
+def test_temporary_write_failure_is_sanitized_and_cleaned(storage):
+    with pytest.raises(StorageError) as raised:
+        with storage.temporary() as handle:
+            handle.write(b"partial")
+            raise OSError("sensitive-write-detail")
+    assert "sensitive-write-detail" not in str(raised.value)
+    assert handle.closed
+    assert not list((storage.root / "tmp").iterdir())
+
+
+def test_temporary_cleanup_failure_is_reported_without_deleting_unrelated_file(
+    storage, monkeypatch
+):
+    unrelated = storage.root / "tmp" / f"{uuid4().hex}.part"
+    unrelated.write_bytes(b"untouched")
+    unlink = Path.unlink
+
+    def fail_owned(path, *args, **kwargs):
+        if path != unrelated:
+            raise PermissionError("sensitive-cleanup-detail")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_owned)
+    with pytest.raises(StorageError, match="Could not clean") as raised:
+        with storage.temporary() as handle:
+            handle.write(b"partial")
+    assert "sensitive-cleanup-detail" not in str(raised.value)
+    assert handle.closed
+    assert unrelated.read_bytes() == b"untouched"
+
+
+def test_temporary_cleanup_does_not_unlink_replacement_object(storage):
+    with pytest.raises(StorageError, match="Could not clean"):
+        with storage.temporary() as handle:
+            temporary = next((storage.root / "tmp").iterdir())
+            replacement = storage.root / "tmp" / f"{uuid4().hex}.part"
+            replacement.write_bytes(b"replacement must survive")
+            handle.close()
+            temporary.unlink()
+            replacement.rename(temporary)
+    assert temporary.read_bytes() == b"replacement must survive"
+
+
+def test_temporary_cleanup_rejects_unexpected_hardlink(storage, tmp_path):
+    outside = tmp_path / "unexpected-link"
+    with pytest.raises(StorageError, match="Could not clean"):
+        with storage.temporary() as handle:
+            handle.write(b"private")
+            handle.flush()
+            temporary = next((storage.root / "tmp").iterdir())
+            os.link(temporary, outside)
+    assert outside.read_bytes() == b"private"
+    assert temporary.exists()
