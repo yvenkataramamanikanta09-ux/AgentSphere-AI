@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from threading import local
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
@@ -32,6 +33,10 @@ class StorageConflict(StorageError):
 
 class StorageLimitExceeded(StorageError):
     pass
+
+
+class StorageBusy(StorageError):
+    """A process is already using the private namespace; retry maintenance later."""
 
 
 def validate_storage_root(value: str | Path) -> Path:
@@ -163,6 +168,85 @@ class StoredObject:
     sha256: str
 
 
+def _identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+@dataclass(frozen=True)
+class StorageEntry:
+    kind: str
+    relative_path: str
+    storage_key: str | None
+    workspace_id: UUID | None
+    modified_at: float
+    identity: tuple[int, int, int, int, int]
+
+
+@dataclass(frozen=True)
+class StorageInventory:
+    entries: tuple[StorageEntry, ...]
+    scanned: int
+    complete: bool
+
+
+def _lock_descriptor(descriptor: int, *, exclusive: bool):
+    """Return a release callback for a nonblocking OS shared/exclusive lock."""
+    if os.name != "nt":
+        import fcntl
+
+        try:
+            fcntl.flock(descriptor, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise StorageBusy("Private storage is in use; retry maintenance later.") from None
+        return lambda: fcntl.flock(descriptor, fcntl.LOCK_UN)
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class Overlapped(ctypes.Structure):
+        _fields_ = [
+            ("Internal", ctypes.c_void_p),
+            ("InternalHigh", ctypes.c_void_p),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    lock = kernel.LockFileEx
+    lock.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(Overlapped),
+    ]
+    lock.restype = wintypes.BOOL
+    unlock = kernel.UnlockFileEx
+    unlock.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.POINTER(Overlapped),
+    ]
+    unlock.restype = wintypes.BOOL
+    overlap = Overlapped()
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+    if not lock(handle, 1 | (2 if exclusive else 0), 0, 1, 0, ctypes.byref(overlap)):
+        if ctypes.get_last_error() in {32, 33}:
+            raise StorageBusy("Private storage is in use; retry maintenance later.") from None
+        raise StorageError("Could not lock private storage.")
+
+    def release():
+        if not unlock(handle, 0, 1, 0, ctypes.byref(overlap)):
+            raise StorageError("Could not release private storage activity lock.")
+
+    return release
+
+
 class PrivateStorage:
     """Explicit initialization; constructing Settings or starting FastAPI writes nothing.
 
@@ -174,10 +258,167 @@ class PrivateStorage:
     def __init__(self, root: str | Path):
         self._root = validate_storage_root(root)
         self._initialized = False
+        self._activity_state = local()
 
     @property
     def root(self) -> Path:
         return self._root
+
+    @contextmanager
+    def activity(self, *, exclusive: bool = False) -> Iterator[None]:
+        """Fence uploads and maintenance across processes without deleting lock files.
+
+        Uploads hold a shared lock through publication and database commit. A
+        reconciler needs the exclusive lock before examining abandoned objects.
+        The sibling lock never enters the managed object or temporary namespace.
+        """
+        if type(exclusive) is not bool:
+            raise ValueError("Storage lock mode must be boolean.")
+        lock_path = self.root.with_name(f".{self.root.name}.activity.lock")
+        descriptor = None
+        release = None
+        entered = False
+        try:
+            self._directories(self.root.parent)
+            flags = os.O_RDWR | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                descriptor = os.open(lock_path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+                before = self._regular(lock_path)
+                _restrict_permissions(lock_path, directory=False)
+            except FileExistsError:
+                before = self._regular(lock_path)
+                descriptor = os.open(lock_path, flags)
+            opened = os.fstat(descriptor)
+            if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+                raise StorageError("Private storage activity lock changed unexpectedly.")
+            _restrict_permissions(lock_path, directory=False)
+            release = _lock_descriptor(descriptor, exclusive=exclusive)
+            current = self._regular(lock_path)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise StorageError("Private storage activity lock changed unexpectedly.")
+            modes = getattr(self._activity_state, "modes", [])
+            self._activity_state.modes = [*modes, exclusive]
+            entered = True
+            yield
+            current = self._regular(lock_path)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise StorageError("Private storage activity lock changed unexpectedly.")
+        except OSError:
+            raise StorageError("Could not access private storage activity lock.") from None
+        finally:
+            try:
+                if entered:
+                    self._activity_state.modes = self._activity_state.modes[:-1]
+                if release is not None:
+                    release()
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+
+    def inventory(self, *, max_entries: int = 10_000) -> StorageInventory:
+        """Inspect a bounded managed tree, without following links or deleting anything.
+
+        The budget counts every directory entry, not only leaf files. Callers
+        must not reconcile a partial inventory because unseen entries may be
+        unexpected objects. Activity locking belongs around the whole operation.
+        """
+        if type(max_entries) is not int or max_entries < 1:
+            raise ValueError("Inventory requires a positive entry budget.")
+        if not self._initialized:
+            raise StorageError("Initialize private storage before inventory.")
+        scanned = 0
+        entries = []
+        pending = [(self.root, ())]
+        try:
+            while pending:
+                directory, parts = pending.pop()
+                self._directories(directory)
+                with os.scandir(directory) as children:
+                    for child in children:
+                        if scanned >= max_entries:
+                            return StorageInventory(tuple(entries), scanned, False)
+                        scanned += 1
+                        path = Path(child.path)
+                        if not parts:
+                            if child.name not in {"objects", "tmp"}:
+                                raise StorageError("Unexpected object in private storage root.")
+                            self._directories(path)
+                            pending.append((path, (child.name,)))
+                        elif parts == ("tmp",):
+                            if re.fullmatch(r"[0-9a-f]{32}\.part", child.name) is None:
+                                raise StorageError("Unexpected temporary storage object.")
+                            info = self._regular(path)
+                            entries.append(
+                                StorageEntry(
+                                    "temporary",
+                                    f"tmp/{child.name}",
+                                    None,
+                                    None,
+                                    info.st_mtime,
+                                    _identity(info),
+                                )
+                            )
+                        elif parts[0] == "objects" and len(parts) < 3:
+                            if re.fullmatch(r"[0-9a-f]{32}", child.name) is None:
+                                raise StorageError(
+                                    "Unexpected object in private storage namespace."
+                                )
+                            self._directories(path)
+                            pending.append((path, (*parts, child.name)))
+                        else:
+                            if child.name != "original":
+                                raise StorageError(
+                                    "Unexpected object in private storage namespace."
+                                )
+                            key = "/".join((*parts, child.name))
+                            validate_storage_key(key)
+                            info = self._regular(path)
+                            entries.append(
+                                StorageEntry(
+                                    "object",
+                                    key,
+                                    key,
+                                    UUID(hex=parts[1]),
+                                    info.st_mtime,
+                                    _identity(info),
+                                )
+                            )
+            return StorageInventory(tuple(entries), scanned, True)
+        except OSError:
+            raise StorageError("Could not inventory private storage.") from None
+
+    def verify_entry(self, entry: StorageEntry) -> Path:
+        """Check a previously inventoried leaf has not been replaced or changed."""
+        if entry.kind == "object":
+            if entry.storage_key != entry.relative_path:
+                raise ValueError("Inventory storage key is invalid.")
+            path = self.object_path(entry.relative_path)
+        elif entry.kind == "temporary" and re.fullmatch(
+            r"tmp/[0-9a-f]{32}\.part", entry.relative_path
+        ):
+            self._directories(self.root / "tmp")
+            path = self.root.joinpath(*entry.relative_path.split("/"))
+        else:
+            raise ValueError("Inventory entry is invalid.")
+        try:
+            if _identity(self._regular(path)) != entry.identity:
+                raise StorageError("Private storage inventory object changed unexpectedly.")
+            return path
+        except OSError:
+            raise StorageError("Private storage inventory object is unavailable.") from None
+
+    def remove_temporary(self, entry: StorageEntry) -> bool:
+        """Remove only the unchanged temporary leaf selected under exclusive activity."""
+        if entry.kind != "temporary":
+            raise ValueError("Only temporary inventory entries can be removed directly.")
+        if not self._initialized or True not in getattr(self._activity_state, "modes", []):
+            raise StorageError("Temporary reconciliation requires exclusive storage activity.")
+        path = self.verify_entry(entry)
+        try:
+            path.unlink()
+            return True
+        except OSError:
+            raise StorageError("Could not remove private temporary object.") from None
 
     @staticmethod
     def _directories(
@@ -207,18 +448,20 @@ class PrivateStorage:
             raise StorageError("Unexpected object in private storage.")
         return info
 
-    def initialize(self) -> None:
+    def initialize(self, *, max_entries: int | None = None) -> None:
         """Provision and secure the managed tree; its parent must already exist.
 
         Existing objects must follow our layout. No files are overwritten or
         removed. Restrict each child's permissions: Windows checks child ACLs
         independently, so a private parent alone cannot protect restored files.
         """
+        if max_entries is not None and (type(max_entries) is not int or max_entries < 1):
+            raise ValueError("Storage initialization requires a positive entry budget.")
         self._initialized = False
         try:
             self._directories(self.root.parent)
             self._directories(self.root, create_below=self.root)
-            directories, files = self._managed_tree()
+            directories, files = self._managed_tree(max_entries=max_entries)
             # Validate a mistaken root before changing ACLs/modes or adding
             # managed directories to unrelated existing content.
             _restrict_directory(self.root)
@@ -234,31 +477,44 @@ class PrivateStorage:
         except (OSError, subprocess.SubprocessError, KeyError, IndexError):
             raise StorageError("Could not initialize private storage.") from None
 
-    def _managed_tree(self) -> tuple[list[Path], list[Path]]:
-        entries = {item.name for item in self.root.iterdir()}
+    def _managed_tree(self, *, max_entries: int | None = None) -> tuple[list[Path], list[Path]]:
+        scanned = 0
+
+        def children(directory):
+            nonlocal scanned
+            # Path.iterdir() uses an eagerly allocated list on Python 3.12.
+            # scandir keeps startup memory bounded before the inventory pass.
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    scanned += 1
+                    if max_entries is not None and scanned > max_entries:
+                        raise StorageError("Private storage initialization entry budget exceeded.")
+                    yield Path(entry.path)
+
+        entries = {item.name for item in children(self.root)}
         if not entries <= {"objects", "tmp"}:
             raise StorageError("Unexpected object in private storage root.")
         directories = []
         files = []
         for name in entries:
             self._directories(self.root / name)
-        workspaces = (self.root / "objects").iterdir() if "objects" in entries else ()
+        workspaces = children(self.root / "objects") if "objects" in entries else ()
         for workspace in workspaces:
             self._directories(workspace)
             if re.fullmatch(r"[0-9a-f]{32}", workspace.name) is None:
                 raise StorageError("Unexpected object in private storage namespace.")
             directories.append(workspace)
-            for object_directory in workspace.iterdir():
+            for object_directory in children(workspace):
                 self._directories(object_directory)
                 if re.fullmatch(r"[0-9a-f]{32}", object_directory.name) is None:
                     raise StorageError("Unexpected object in private storage namespace.")
                 directories.append(object_directory)
-                for original in object_directory.iterdir():
+                for original in children(object_directory):
                     if original.name != "original":
                         raise StorageError("Unexpected object in private storage namespace.")
                     self._regular(original)
                     files.append(original)
-        temporaries = (self.root / "tmp").iterdir() if "tmp" in entries else ()
+        temporaries = children(self.root / "tmp") if "tmp" in entries else ()
         for temporary in temporaries:
             if re.fullmatch(r"[0-9a-f]{32}\.part", temporary.name) is None:
                 raise StorageError("Unexpected temporary storage object.")

@@ -8,7 +8,7 @@ from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -23,9 +23,23 @@ from agentsphere.document_lifecycle import (
     require_storage_schema,
     upload_document_id,
 )
-from agentsphere.models import Document, DocumentFile, DocumentJob, JobKind, JobState, Workspace
+from agentsphere.models import (
+    Document,
+    DocumentFile,
+    DocumentJob,
+    DocumentSection,
+    JobKind,
+    JobState,
+    Workspace,
+)
 from agentsphere.permissions import Access, require_editor, workspace_access
-from agentsphere.schemas.documents import DocumentRead, FileRead, UploadRead
+from agentsphere.schemas.documents import (
+    DocumentRead,
+    FileRead,
+    SectionPage,
+    SectionRead,
+    UploadRead,
+)
 from agentsphere.security import DatabaseSession, current_user
 from agentsphere.storage import PrivateStorage, StorageError, new_storage_key
 from agentsphere.uploads import finish_thread_call, receive_upload
@@ -210,23 +224,26 @@ async def upload_document(
         file_id = uuid4()
         key = new_storage_key(workspace_id, file_id)
         settings = request.app.state.settings
-        async with receive_upload(
-            request,
-            storage,
-            max_bytes=settings.max_upload_bytes,
-            timeout_seconds=settings.upload_timeout_seconds,
-        ) as incoming:
-            result = await finish_thread_call(
-                publish_and_finalize,
+        # Reconciliation takes an exclusive fence. Keep this shared fence until
+        # all private writes, final commits and compensation have finished.
+        with storage.activity():
+            async with receive_upload(
                 request,
-                workspace_id,
-                user_id,
-                document_id,
                 storage,
-                key,
-                incoming,
-                file_id,
-            )
+                max_bytes=settings.max_upload_bytes,
+                timeout_seconds=settings.upload_timeout_seconds,
+            ) as incoming:
+                result = await finish_thread_call(
+                    publish_and_finalize,
+                    request,
+                    workspace_id,
+                    user_id,
+                    document_id,
+                    storage,
+                    key,
+                    incoming,
+                    file_id,
+                )
         response.headers["Location"] = str(
             request.url_for(
                 "get_document", workspace_id=str(workspace_id), document_id=str(document_id)
@@ -249,6 +266,37 @@ def file_metadata(document_id: UUID, session: DatabaseSession, access: Access):
     if attachment is None:
         raise HTTPException(404, "Document has no attached file.")
     return read_attachment(session, attachment)
+
+
+@router.get("/{document_id}/sections", response_model=SectionPage)
+def extracted_sections(
+    document_id: UUID,
+    session: DatabaseSession,
+    access: Access,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    document = find_document(session, document_id, access.workspace.id)
+    require_storage_schema(session)
+    attachment = session.scalar(select(DocumentFile).where(DocumentFile.document_id == document.id))
+    if attachment is None:
+        raise HTTPException(404, "Document has no attached file.")
+    if not download_allowed(session, attachment):
+        raise HTTPException(409, "Sections are unavailable until processing succeeds.")
+    rows = session.scalars(
+        select(DocumentSection)
+        .where(DocumentSection.document_id == document.id)
+        .order_by(DocumentSection.ordinal)
+        .offset(offset)
+        .limit(limit + 1)
+    ).all()
+    return SectionPage(
+        document_id=document.id,
+        items=[SectionRead.model_validate(row) for row in rows[:limit]],
+        limit=limit,
+        offset=offset,
+        has_more=len(rows) > limit,
+    )
 
 
 class ValidatedDownload(Response):

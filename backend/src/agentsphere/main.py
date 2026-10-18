@@ -41,7 +41,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="AgentSphere AI",
         version="0.3.0",
         description=(
-            "Document metadata and private uploads. Processing jobs are queued; no worker or AI."
+            "Private document uploads and extraction. "
+            "Start the separate PostgreSQL worker to process jobs."
         ),
         lifespan=lifespan,
     )

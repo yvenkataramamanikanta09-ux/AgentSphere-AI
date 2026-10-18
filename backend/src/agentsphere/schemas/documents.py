@@ -121,3 +121,23 @@ class UploadRead(BaseModel):
     document: DocumentRead
     file: FileRead
     replayed: bool = False
+
+
+class SectionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    ordinal: int
+    text: str
+    page_number: int | None
+    heading: str | None
+    line_start: int | None
+    line_end: int | None
+
+
+class SectionPage(BaseModel):
+    document_id: UUID
+    items: list[SectionRead]
+    limit: int
+    offset: int
+    has_more: bool
