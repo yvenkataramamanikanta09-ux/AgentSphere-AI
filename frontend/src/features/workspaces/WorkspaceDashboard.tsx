@@ -136,6 +136,7 @@ function DashboardContent() {
       </section>
 
       {data.active && access && <section className="permissions-panel panel" id="workspace-access" aria-labelledby="permissions-title"><span className="permission-symbol" aria-hidden="true">◇</span><div><h2 id="permissions-title">{access.title}</h2><p>{access.description}</p></div><RoleBadge role={data.active.role} /></section>}
+      {data.active && data.selectionError && <div className="notice error" role="alert">{data.selectionError}<button className="inline-button" type="button" onClick={data.reload}>Retry access check</button></div>}
       {data.active && <DocumentLibrary key={`${data.active.id}:${data.active.role}`} workspace={data.active} checkingAccess={data.checkingAccess} onPermissionFailure={data.reload} />}
       <footer className="dashboard-footer"><span>AgentSphere AI</span><span>Your workspace. Your access.</span></footer>
     </main>

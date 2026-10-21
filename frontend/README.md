@@ -1,11 +1,16 @@
-# AgentSphere AI frontend — Module 4, Stage 4
+# AgentSphere AI frontend — Module 5, Stage 4
 
 React + TypeScript authentication UI connected to the real FastAPI Module 3 API.
 The app contains registration, login, session restoration, logout, and the
-workspace dashboard and workspace-scoped document metadata library. See
+workspace dashboard and workspace-scoped document library. It supports private
+file uploads, processing status, plain-text section previews, and authorized
+original downloads through the existing Module 5 API and separate worker. See
+[the Module 5 frontend guide](../docs/MODULE5_STAGE4.md) for the isolated upload
+environment, workflow, tests, safety guarantees, and limitations. See
 [the Stage 3 guide](../docs/MODULE4_STAGE3.md) for document operations, permissions,
 tests, and real API verification. The [Stage 2 guide](../docs/MODULE4_STAGE2.md)
-explains workspace selection and creation. Actual file uploads are not included.
+explains workspace selection and creation. The separate **Add record** action
+still creates metadata without uploading a file.
 See [the Stage 4 guide](../docs/MODULE4_STAGE4.md) for the complete user workflow,
 accessibility improvements, and Playwright tests against the real local application.
 
@@ -14,6 +19,14 @@ accessibility improvements, and Playwright tests against the real local applicat
 Use PowerShell in the repository. Start the existing local PostgreSQL instance
 first. The backend's `.env` already supplies local database credentials and a
 generated rate-limit secret; never copy them into this frontend.
+
+The existing development database remains at Alembic **0002**. The commands below
+preserve its authentication, workspace, and metadata functionality. Upload,
+processing, preview, and download need **0003** and a private storage root shared
+by API and worker. Do not migrate the development database or initialize its
+storage as part of this stage. Use the disposable E2E environment below for the
+complete upload workflow; the Module 5 guide links the separately approved
+backup/migration procedure.
 
 Terminal 1, in `backend`:
 
@@ -57,6 +70,13 @@ The frontend never reads the HttpOnly cookie or stores it or the CSRF token in
 localStorage. For production, use the backend's HTTPS settings and serve the
 frontend and `/api` under one HTTPS origin.
 
+File transfers use XMLHttpRequest for actual upload progress and browser-generated
+multipart boundaries. Each selected file gets an in-memory UUID upload intent;
+an explicit **Retry same upload** retains that file and key after an uncertain
+response. The client never silently repeats an upload or generates a replacement
+key on failure. Changing the file or closing/reloading the form loses that intent.
+Check the library before starting a new intent after an uncertain result.
+
 ## Checks
 
 ```powershell
@@ -72,9 +92,14 @@ does not use mock data. The documented local run connects to FastAPI and Postgre
 
 The E2E command requires the existing local PostgreSQL cluster and its ignored
 configuration. It creates a unique disposable database, applies migrations,
-starts test servers on ports 8002 and 5174, runs 53 live API checks and 17 browser
-tests, then removes only that database and stops those servers. The development
-database and development servers are not used by these tests. Installed Chrome
+starts test servers on ports 8002 and 5174, runs 53 live API regression checks,
+and starts a real separate Python worker with the API's isolated storage root.
+It runs the authentication/workspace/metadata and upload browser tests, then
+removes only that database, generated fixtures, and isolated storage and stops
+its processes. The development database and development servers are not used.
+Run `npm run test:e2e -- --headed --workers=1` to watch the real workflow at
+http://127.0.0.1:5174/ while the tests run. The temporary services stop afterward.
+Installed Chrome
 is selected automatically at its standard Windows path; otherwise install the
 Playwright browser with `npx playwright install chromium`. Reports and screenshots
 are ignored under `.local/e2e/`. Session traces are disabled, but HTML action

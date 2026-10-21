@@ -20,7 +20,7 @@ async function login(page: Page, role = 'owner') {
     await expect(picker).not.toHaveValue('')
     await picker.selectOption(fixture.workspace_id)
     await expect(picker).toHaveValue(fixture.workspace_id)
-    await expect(page.getByText('Metadata for Browser research. Files are not uploaded.', { exact: true })).toBeVisible()
+    await expect(page.getByText('Documents and files for Browser research.', { exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Refresh records', exact: true })).toBeEnabled()
   }
 }

@@ -6,6 +6,8 @@ import App from '../../App'
 import { clearCsrf } from '../../api/client'
 import type { Workspace } from '../../api/client'
 import type { DocumentRecord } from '../../api/documents'
+import { fileApi } from '../../api/documentFiles'
+import type { DocumentFileMetadata } from '../../api/documentFiles'
 import { DocumentLibrary } from './DocumentLibrary'
 
 const workspace: Workspace = { id: 'space-a', name: 'Research', role: 'owner', owner_user_id: 'user-id', created_at: '2026-10-17T00:00:00Z' }
@@ -55,6 +57,7 @@ it.each(['owner', 'editor', 'viewer'] as const)('allows %s to read and shows onl
   expect(await screen.findByRole('heading', { name: 'research.pdf' })).toBeInTheDocument()
   const writer = role !== 'viewer'
   expect(!!screen.queryByRole('button', { name: 'Add record' })).toBe(writer)
+  expect(!!screen.queryByRole('button', { name: 'Upload document' })).toBe(writer)
   expect(!!screen.queryByRole('button', { name: 'Edit metadata' })).toBe(writer)
   expect(!!screen.queryByRole('button', { name: 'Archive record' })).toBe(writer)
   expect(!!screen.queryByRole('button', { name: 'Delete record' })).toBe(writer)
@@ -208,4 +211,61 @@ it('recovers a failed list through retry', async () => {
   failed = false
   await userEvent.click(screen.getByRole('button', { name: 'Retry documents' }))
   expect(await screen.findByRole('button', { name: 'View research.pdf' })).toBeInTheDocument()
+})
+
+const attachment: DocumentFileMetadata = {
+  id: 'attachment-a', document_id: record.id, original_filename: record.filename,
+  sha256: 'a'.repeat(64), uploaded_by: 'user-id', uploaded_at: workspace.created_at,
+  processing_status: 'ready', processed_at: workspace.created_at,
+  error_code: null, warning_code: null, download_available: true,
+}
+
+it('keeps file-backed measurements immutable and sends only a renamed filename', async () => {
+  const { fetcher } = backend([record], (path) => path.endsWith('/file') ? json(attachment) : undefined)
+  mount()
+  await userEvent.click(await screen.findByRole('button', { name: 'View research.pdf' }))
+  await screen.findByText('Ready')
+  await userEvent.click(screen.getByRole('button', { name: 'Edit metadata' }))
+  expect(screen.getByLabelText('Content type')).toBeDisabled()
+  expect(screen.getByLabelText('Measured size (bytes)')).toHaveAttribute('readonly')
+  await userEvent.clear(screen.getByLabelText('Filename'))
+  await userEvent.type(screen.getByLabelText('Filename'), 'renamed.pdf')
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await screen.findByText('“renamed.pdf” updated.')
+  const patch = fetcher.mock.calls.find(([, options]) => options?.method === 'PATCH')
+  expect(JSON.parse(patch![1]!.body as string)).toEqual({ filename: 'renamed.pdf' })
+})
+
+it('restores keyboard focus to the upload launcher after cancellation', async () => {
+  backend([])
+  mount()
+  await userEvent.click(screen.getByRole('button', { name: 'Upload document' }))
+  expect(screen.getByLabelText('Choose document')).toHaveFocus()
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByRole('button', { name: 'Upload document' })).toHaveFocus()
+  expect(screen.queryByLabelText('Choose document')).not.toBeInTheDocument()
+})
+
+it('selects a received upload, clears an archived filter, and preserves the metadata-only action', async () => {
+  const created = { ...record, id: 'uploaded-a', filename: 'new.txt', content_type: 'text/plain', size_bytes: 5 }
+  const file = { ...attachment, document_id: created.id, original_filename: created.filename, processing_status: 'queued' as const, processed_at: null, download_available: false }
+  const { records } = backend([], (path) => path.endsWith('/file') ? json(file) : undefined)
+  const upload = vi.spyOn(fileApi, 'upload').mockImplementation(async () => {
+    records.push(created)
+    return { document: created, file, replayed: false }
+  })
+  try {
+    mount()
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'archived')
+    await screen.findByText('No matching records')
+    await userEvent.click(screen.getByRole('button', { name: 'Upload document' }))
+    await userEvent.upload(screen.getByLabelText('Choose document'), new File(['hello'], 'new.txt', { type: 'text/plain' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Upload file' }))
+    expect(await screen.findByText(/Upload received\./)).toBeInTheDocument()
+    expect(screen.getByLabelText('Status')).toHaveValue('')
+    expect(await screen.findByRole('heading', { name: 'new.txt' })).toBeInTheDocument()
+    expect(await screen.findByText('Queued for processing')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add record' })).toBeEnabled()
+    expect(upload).toHaveBeenCalledTimes(1)
+  } finally { upload.mockRestore() }
 })

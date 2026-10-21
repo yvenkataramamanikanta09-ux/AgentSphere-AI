@@ -60,11 +60,17 @@ export function useWorkspaces() {
     workspaceApi.get(selectedId, controller.signal).then((workspace) => {
       if (!controller.signal.aborted) setSelection({ id: selectedId, revision, workspace, error: null })
     }).catch((cause) => {
-      if (!controller.signal.aborted) setSelection({ id: selectedId, revision, workspace: null, error:
-        cause instanceof ApiError && cause.status === 404
-          ? 'This workspace is unavailable or you no longer have access. Choose another workspace.'
-          : cause instanceof Error ? cause.message : 'Could not load this workspace.',
-      })
+      if (!controller.signal.aborted) {
+        const transient = cause instanceof ApiError && (cause.status === 0 || cause.status === 429 || cause.status >= 500)
+        // Keep an uncertain upload's File/UUID during a temporary same-workspace
+        // outage. Writes remain paused until a successful access recheck.
+        setSelection((previous) => ({ id: selectedId, revision,
+          workspace: transient && previous.id === selectedId ? previous.workspace : null,
+          error: cause instanceof ApiError && cause.status === 404
+            ? 'This workspace is unavailable or you no longer have access. Choose another workspace.'
+            : 'Could not verify workspace access. Writing is paused. Retry the access check when the service is available.',
+        }))
+      }
     })
     return () => controller.abort()
   }, [selectedId, revision])
@@ -102,6 +108,6 @@ export function useWorkspaces() {
   // Preserve drafts during a recheck of the same workspace; writes pause until verified.
   const active = selectedId && selection.id === selectedId ? selection.workspace : null
   const selectionError = matchesSelection ? selection.error : null
-  const checkingAccess = !!selectedId && !matchesSelection
+  const checkingAccess = !!selectedId && (!matchesSelection || !!selectionError)
   return { items, loading, loadingMore, hasMore, error, active, selectedId, selectionError, checkingAccess, select, reload, loadMore }
 }

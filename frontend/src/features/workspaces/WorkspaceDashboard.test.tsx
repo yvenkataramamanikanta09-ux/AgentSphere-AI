@@ -3,8 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 import App from '../../App'
-import { clearCsrf } from '../../api/client'
+import { ApiError, clearCsrf } from '../../api/client'
 import type { Workspace } from '../../api/client'
+import { fileApi } from '../../api/documentFiles'
 
 const user = { id: 'user-id', email: 'person@example.com', display_name: 'Person', created_at: '2026-10-17T00:00:00Z' }
 const research: Workspace = { id: 'research-id', name: 'Research', role: 'owner', owner_user_id: user.id, created_at: user.created_at }
@@ -198,4 +199,34 @@ it('removes selected permissions after a refreshed access check returns 404', as
   await userEvent.click(screen.getByRole('button', { name: 'Refresh' }))
   expect(await screen.findByText('Workspace unavailable')).toBeInTheDocument()
   expect(screen.queryByRole('link', { name: 'Ownership & access' })).not.toBeInTheDocument()
+})
+
+it('retains an uncertain upload and UUID through transient access failure while pausing writes', async () => {
+  let unavailable = false
+  backend([research], (path) => unavailable && path === `/api/v1/workspaces/${research.id}` ? json({}, 503) : undefined)
+  const upload = vi.spyOn(fileApi, 'upload')
+    .mockRejectedValueOnce(new ApiError(0, 'Network unavailable.'))
+    .mockImplementationOnce(() => new Promise(() => {}))
+  try {
+    mount()
+    await screen.findByRole('link', { name: 'Ownership & access' })
+    await userEvent.click(screen.getByRole('button', { name: 'Upload document' }))
+    const original = new File(['retained bytes'], 'retained.txt', { type: 'text/plain' })
+    await userEvent.upload(screen.getByLabelText('Choose document'), original)
+    await userEvent.click(screen.getByRole('button', { name: 'Upload file' }))
+    await screen.findByText(/Connection lost/)
+    const key = upload.mock.calls[0][2]
+    unavailable = true
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    await screen.findByText(/Could not verify workspace access/)
+    expect((screen.getByLabelText('Choose document') as HTMLInputElement).files?.[0]).toBe(original)
+    expect(screen.getByRole('button', { name: 'Retry same upload' })).toBeDisabled()
+    unavailable = false
+    await userEvent.click(screen.getByRole('button', { name: 'Retry access check' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry same upload' })).toBeEnabled())
+    await userEvent.click(screen.getByRole('button', { name: 'Retry same upload' }))
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(upload.mock.calls[1][1]).toBe(original)
+    expect(upload.mock.calls[1][2]).toBe(key)
+  } finally { upload.mockRestore() }
 })

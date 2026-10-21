@@ -15,19 +15,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true
+    const controller = new AbortController()
     async function restore() {
       try {
-        const user = await authApi.me()
-        await obtainCsrf()
+        const user = await authApi.me(controller.signal)
+        await obtainCsrf(controller.signal)
         if (active) setState({ status: 'authenticated', user, error: null })
       } catch (error) {
-        if (!active) return
+        if (!active || controller.signal.aborted) return
         const offline = error instanceof ApiError && error.status !== 401
         setState({ status: 'guest', user: null, error: offline ? (error as Error).message : null })
       }
     }
     void restore()
-    return () => { active = false }
+    return () => { active = false; controller.abort() }
   }, [])
 
   useEffect(() => {
@@ -44,6 +45,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [state.status])
 
   const login = useCallback(async (email: string, password: string) => {
+    setState((current) => ({ ...current, error: null }))
     const user = await authApi.login(email, password)
     setState({ status: 'authenticated', user, error: null })
   }, [])

@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router'
@@ -81,4 +82,20 @@ it('returns to sign-in after registration because registration does not log in',
   expect(await screen.findByText('Your account is ready. Sign in to continue.')).toBeInTheDocument()
   expect(screen.getByRole('heading', { name: 'Sign in to your account' })).toBeInTheDocument()
   expect(fetcher).toHaveBeenCalledTimes(3)
+})
+
+it('aborts obsolete StrictMode restoration without creating a session-change login error', async () => {
+  const fetcher = vi.fn(async (path: string) => {
+    if (path === '/api/v1/auth/csrf') return json({ csrf_token: 'anonymous-token' })
+    return json({ detail: 'Authentication required.' }, 401)
+  })
+  vi.stubGlobal('fetch', fetcher)
+  render(<StrictMode><MemoryRouter initialEntries={['/login']}><App /></MemoryRouter></StrictMode>)
+  await userEvent.type(await screen.findByLabelText('Email address'), 'person@example.com')
+  await userEvent.type(screen.getByLabelText('Password'), 'An incorrect passphrase')
+  await userEvent.click(screen.getByRole('button', { name: /^Sign in/ }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Email or password is incorrect')
+  expect(screen.queryByText('Your session changed. Please try again.')).not.toBeInTheDocument()
+  const restoration = fetcher.mock.calls.filter(([path]) => path === '/api/v1/auth/me')
+  expect(restoration).toHaveLength(2)
 })
