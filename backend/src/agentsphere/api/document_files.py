@@ -1,15 +1,17 @@
-"""Authorized multipart intake and gated original retrieval. No extraction worker."""
+"""Authorized multipart intake and retrieval gated by durable worker results."""
 
 import asyncio
 import hashlib
 import logging
-from contextlib import contextmanager
+import time
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
@@ -34,6 +36,7 @@ from agentsphere.models import (
 )
 from agentsphere.permissions import Access, require_editor, workspace_access
 from agentsphere.schemas.documents import (
+    DocumentMetadata,
     DocumentRead,
     FileRead,
     SectionPage,
@@ -41,12 +44,32 @@ from agentsphere.schemas.documents import (
     UploadRead,
 )
 from agentsphere.security import DatabaseSession, current_user
-from agentsphere.storage import PrivateStorage, StorageError, new_storage_key
+from agentsphere.storage import PrivateStorage, StorageBusy, StorageError, new_storage_key
 from agentsphere.uploads import finish_thread_call, receive_upload
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/workspaces/{workspace_id}/documents", tags=["Document files"])
 transaction = contextmanager(get_session)
+
+
+@asynccontextmanager
+async def upload_activity(storage):
+    """Yield while briefly waiting for another process's initialization fence."""
+    with ExitStack() as stack:
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                stack.enter_context(storage.activity())
+            except StorageBusy:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                await asyncio.sleep(min(remaining, 0.01))
+            else:
+                break
+        # Only acquisition is retried, never multipart reads, publication or errors
+        # raised by the protected body. Enter and exit stay on the same thread.
+        yield
 
 
 def authorize_upload(request, workspace_id, nonce):
@@ -57,7 +80,16 @@ def authorize_upload(request, workspace_id, nonce):
         document_id = upload_document_id(user.id, workspace_id, nonce)
         if db.get(DocumentJob, cleanup_job_id(document_id)) is not None:
             raise HTTPException(409, "This upload was deleted. Use a new idempotency key.")
-        return user.id, document_id
+        replay_filename = db.scalar(
+            select(DocumentFile.original_filename)
+            .join(Document, Document.id == DocumentFile.document_id)
+            .where(
+                Document.id == document_id,
+                Document.workspace_id == workspace_id,
+                DocumentFile.uploaded_by == user.id,
+            )
+        )
+        return user.id, document_id, replay_filename
 
 
 def get_storage(request):
@@ -99,6 +131,12 @@ def finalize_upload(request, workspace_id, user_id, document_id, stored, metadat
                 file=read_attachment(db, attachment),
                 replayed=True,
             )
+        # A compatibility allowance can only replay an existing attachment,
+        # never create a new record after an unexpected change in database state.
+        try:
+            metadata = DocumentMetadata.model_validate(metadata.model_dump())
+        except ValidationError:
+            raise HTTPException(422, "Invalid upload filename.") from None
         document = Document(id=document_id, workspace_id=workspace_id, **metadata.model_dump())
         db.add(document)
         db.flush()
@@ -208,7 +246,7 @@ async def upload_document(
     response: Response,
     idempotency_key: Annotated[UUID, Header(alias="Idempotency-Key")],
 ):
-    user_id, document_id = await run_in_threadpool(
+    user_id, document_id, replay_filename = await run_in_threadpool(
         authorize_upload, request, workspace_id, idempotency_key
     )
     slots = request.app.state.upload_slots
@@ -226,12 +264,13 @@ async def upload_document(
         settings = request.app.state.settings
         # Reconciliation takes an exclusive fence. Keep this shared fence until
         # all private writes, final commits and compensation have finished.
-        with storage.activity():
+        async with upload_activity(storage):
             async with receive_upload(
                 request,
                 storage,
                 max_bytes=settings.max_upload_bytes,
                 timeout_seconds=settings.upload_timeout_seconds,
+                replay_filename=replay_filename,
             ) as incoming:
                 result = await finish_thread_call(
                     publish_and_finalize,

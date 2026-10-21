@@ -1,38 +1,92 @@
-# AgentSphere backend — Module 3
+# AgentSphere AI backend — Module 5
 
-FastAPI stores **document metadata** in PostgreSQL with accounts, server-side
-sessions, CSRF protection, and owner/editor/viewer workspace permissions.
-There are no file uploads, RAG, LLM calls, or agents in this module.
+FastAPI provides cookie-based authentication, workspace permissions, document
+metadata CRUD, private multipart uploads, processing status, extracted sections,
+and authorized original downloads. A separate Python worker uses PostgreSQL jobs
+for bounded PDF/DOCX/TXT/Markdown extraction and durable file cleanup.
 
-Start with [the Module 3 guide](../docs/MODULE3.md) for configuration, authentication,
-Swagger examples, migrations, and security tests. The
-[Module 2 tutorial](../docs/MODULE2.md) explains the database foundation. The original
-[Module 1 guide](../docs/MODULE1.md) remains available.
+Start with the [Module 5 handover](../docs/MODULE5_STAGE5.md) for architecture,
+security boundaries, verification results, recovery, and the migration checklist.
+The [Module 3 guide](../docs/MODULE3.md) explains authentication and permissions;
+the [Module 2 guide](../docs/MODULE2.md) explains SQLAlchemy and migrations.
 
-Run these commands in this `backend` directory using Python 3.12+ and Poetry 2:
+## Existing local development environment
+
+The existing development database is **0002**. Keep it there until backup and
+migration receive separate approval. Metadata, accounts, and workspaces work at
+0002; file APIs fail closed and the worker refuses to start. Do not run `init`,
+`alembic upgrade`, or a worker against that database as a setup shortcut.
+
+From this `backend` directory, using the existing Poetry environment:
 
 ```powershell
-poetry install
-# One-time setup using an installed PostgreSQL 18 distribution:
-poetry run python scripts/local_postgres.py init
-poetry run python scripts/configure_local_auth.py
-poetry run alembic upgrade head
-poetry run pytest -q
-poetry run uvicorn agentsphere.main:create_app --factory --reload --host 127.0.0.1 --port 8000 --no-proxy-headers
+.\.venv\Scripts\python.exe scripts/local_postgres.py start
+$env:APP_ORIGIN = 'http://127.0.0.1:5173'
+.\.venv\Scripts\python.exe -m uvicorn agentsphere.main:create_app --factory --host 127.0.0.1 --port 8001 --no-proxy-headers
 ```
 
-The local setup creates separate development/test databases on port **55432**,
-generates passwords, and writes ignored `.env` / `.local` files. It refuses to
-overwrite existing configuration or data. It does not change the PostgreSQL
-Windows service on port 5432. Use `start` instead of `init` on subsequent runs.
+The existing ignored `.env` supplies local credentials and explicitly permits
+loopback HTTP. Vite must proxy `/api` to port 8001; see the
+[frontend instructions](../frontend/README.md). Use the exact `127.0.0.1` hostname.
+The configured origin, Host checks, HttpOnly cookies, and CSRF checks still apply.
+Use the frontend at [http://127.0.0.1:5173/](http://127.0.0.1:5173/).
+The health endpoint is `/health/live`. Swagger is at
+[http://127.0.0.1:8001/docs](http://127.0.0.1:8001/docs), but direct authentication
+requests there do not match the frontend origin in this configuration.
 
-Open [Swagger UI](http://127.0.0.1:8000/docs). Stop Uvicorn with Ctrl+C and the
-isolated database with `poetry run python scripts/local_postgres.py stop`.
+## Complete file workflow without changing development data
 
-If Poetry is not on PATH, activate its existing executable or substitute
-`.\.venv\Scripts\python.exe -m pytest`, `-m alembic`, and `-m uvicorn` for the
-respective `poetry run` commands after dependencies have been installed.
+Install dependencies with `poetry install --with lint` when setting up a fresh checkout.
+The existing `.venv\Scripts\python.exe` is used below. These drivers require the
+existing local cluster and its ignored configuration; they create their own
+databases, apply 0003 only there, and allocate temporary private storage.
 
-The HTTP quick start is explicitly limited to loopback development; HTTPS and
-Secure cookies are the default for other environments. Never commit
-`.env` or `.local`, and do not use the development credentials in a deployed app.
+```powershell
+# Complete backend suite, including clean/populated migration tests:
+.\.venv\Scripts\python.exe scripts/verify_stage2.py -q
+# Real HTTP API and separate worker, all four formats and failure recovery:
+.\.venv\Scripts\python.exe scripts/verify_processing.py
+# From ../frontend, real browser + API + worker workflow:
+npm run test:e2e
+# To watch the disposable application while tests run:
+npm run test:e2e -- --headed --workers=1
+```
+
+The browser harness uses ports 8002/5174 and removes only its own resources.
+Generated test passwords, fixtures, logs, and reports stay local and ignored.
+Do not publish reports containing generated action labels. An externally killed
+harness can leave disposable resources; investigate their exact ownership before
+cleanup. Do not issue wildcard database or storage deletion commands.
+
+## Worker, only for an approved 0003 environment
+
+After a separate backup/migration approval, API and worker must use the same
+0003 database and absolute private storage root. Never mount that root as static
+content. See `.env.example` for bounded extraction settings and secure defaults.
+
+```powershell
+.\.venv\Scripts\python.exe -m agentsphere.worker
+# One available job attempt; exit success does not mean every document is ready:
+.\.venv\Scripts\python.exe -m agentsphere.worker --once
+# Conservative maintenance; queues original cleanup, then exits:
+.\.venv\Scripts\python.exe -m agentsphere.worker --reconcile
+```
+
+Stop API/worker with Ctrl+C. Expired leases allow another worker to recover after
+a crash. Reconciliation retains uncertain or referenced objects. It does not
+purge upload idempotency tombstones. Parsing is not antivirus scanning or a full
+OS security sandbox. Production needs HTTPS, private filesystem permissions,
+backups, process supervision, and request/concurrency/disk controls.
+
+## Static checks
+
+```powershell
+.\.venv\Scripts\python.exe -m ruff check src tests scripts
+.\.venv\Scripts\python.exe -m ruff format --check src tests scripts
+poetry check --lock
+.\.venv\Scripts\python.exe -m alembic heads
+```
+
+Use the disposable drivers for `alembic check` and integration pytest rather than
+pointing ad hoc migration/test commands at development. Do not commit `.env`,
+`.local`, environments, originals, database files, or generated credentials.

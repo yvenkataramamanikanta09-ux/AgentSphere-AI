@@ -20,6 +20,7 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID, uuid4
+from zipfile import ZIP_STORED, ZipFile
 
 import httpx
 import psycopg
@@ -246,6 +247,8 @@ def create_upload_fixtures(root):
             "synthetic-invalid.pdf",
             b"%PDF-1.7\nGenerated malformed PDF.\n%%EOF\n",
         ),
+        "invalid_txt": ("synthetic-invalid-utf8.txt", b"Generated invalid UTF-8: \xff\n"),
+        "invalid_md": ("synthetic-invalid-utf8.md", b"# Generated invalid UTF-8\n\xff\n"),
     }
     writer = PdfWriter()
     page = writer.add_blank_page(width=250, height=200)
@@ -273,6 +276,13 @@ def create_upload_fixtures(root):
     output = BytesIO()
     word.save(output)
     payloads["docx"] = ("synthetic-source.docx", output.getvalue())
+    # Basic ZIP evidence passes intake; malformed XML must fail in the worker,
+    # leaving previews and original downloads unavailable.
+    output = BytesIO()
+    with ZipFile(output, "w", compression=ZIP_STORED) as package:
+        package.writestr("[Content_Types].xml", b"<Types>")
+        package.writestr("word/document.xml", b"<document>")
+    payloads["malformed_docx"] = ("synthetic-invalid.docx", output.getvalue())
     result = {}
     for kind, (filename, payload) in payloads.items():
         path = folder / filename

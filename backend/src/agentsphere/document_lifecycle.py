@@ -1,4 +1,4 @@
-"""Database-side file lifecycle; no worker executes these durable jobs yet."""
+"""Database-side lifecycle, durable worker jobs and validated-file visibility."""
 
 from uuid import UUID, uuid5
 

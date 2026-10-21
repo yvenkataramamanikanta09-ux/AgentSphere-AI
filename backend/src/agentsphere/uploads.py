@@ -24,7 +24,11 @@ from starlette.datastructures import Headers, UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import ClientDisconnect
 
-from agentsphere.schemas.documents import SUPPORTED_CONTENT_TYPES, DocumentMetadata
+from agentsphere.schemas.documents import (
+    SUPPORTED_CONTENT_TYPES,
+    DocumentMetadata,
+    DocumentMetadataFields,
+)
 from agentsphere.storage import PrivateStorage
 
 REQUEST_OVERHEAD_BYTES = 65_536
@@ -35,7 +39,7 @@ BOUNDARY = re.compile(r"[0-9A-Za-z'()+_,./:=?-]{1,70}\Z", re.ASCII)
 @dataclass(frozen=True)
 class ReceivedUpload:
     file: BinaryIO
-    metadata: DocumentMetadata
+    metadata: DocumentMetadataFields
 
 
 async def finish_thread_call(function, *args, **kwargs):
@@ -106,11 +110,12 @@ def _parameters(value: str, header: str) -> tuple[str, dict[str, str]]:
 
 
 class _PrivateParser(MultiPartParser):
-    def __init__(self, headers, stream, *, storage, stack, max_bytes):
+    def __init__(self, headers, stream, *, storage, stack, max_bytes, replay_filename=None):
         super().__init__(headers, stream, max_files=1, max_fields=0)
         self.storage = storage
         self.stack = stack
         self.max_bytes = max_bytes
+        self.replay_filename = replay_filename
         self.byte_count = 0
         self.header_bytes = 0
         self.part_count = 0
@@ -165,9 +170,12 @@ class _PrivateParser(MultiPartParser):
         if canonical is None:
             raise HTTPException(415, "Supported formats are PDF, DOCX, TXT and Markdown.")
         try:
-            self.metadata = DocumentMetadata(
-                filename=filename, content_type=canonical, size_bytes=1
+            # This allowance comes only from an authorized persisted attachment,
+            # never a client flag. Finalization must still prove an exact replay.
+            metadata_type = (
+                DocumentMetadataFields if filename == self.replay_filename else DocumentMetadata
             )
+            self.metadata = metadata_type(filename=filename, content_type=canonical, size_bytes=1)
         except ValidationError:
             raise HTTPException(422, "Invalid upload filename.") from None
         headers = Headers(raw=self._current_part.item_headers)
@@ -242,7 +250,7 @@ def _validate_docx(file: BinaryIO) -> None:
         raise HTTPException(422, "Invalid DOCX package.") from None
 
 
-def validate_basic_format(file: BinaryIO, metadata: DocumentMetadata) -> None:
+def validate_basic_format(file: BinaryIO, metadata: DocumentMetadataFields) -> None:
     """Check limited format evidence only; never mark an attachment validated here."""
     try:
         file.seek(0)
@@ -283,6 +291,7 @@ async def receive_upload(
     *,
     max_bytes: int,
     timeout_seconds: int,
+    replay_filename: str | None = None,
 ) -> AsyncIterator[ReceivedUpload]:
     """Own every temporary handle until publication/finalization finishes or fails."""
     if type(max_bytes) is not int or max_bytes <= 0 or timeout_seconds <= 0:
@@ -335,7 +344,12 @@ async def receive_upload(
 
     with ExitStack() as stack:
         parser = _PrivateParser(
-            request.headers, bounded_stream(), storage=storage, stack=stack, max_bytes=max_bytes
+            request.headers,
+            bounded_stream(),
+            storage=storage,
+            stack=stack,
+            max_bytes=max_bytes,
+            replay_filename=replay_filename,
         )
         try:
             async with asyncio.timeout(timeout_seconds):

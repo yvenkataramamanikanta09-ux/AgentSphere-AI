@@ -45,8 +45,12 @@ def child_probe(storage, mode):
     )
 
 
-def test_construct_and_initialize_do_not_create_activity_file(storage):
-    assert not storage.root.with_name(".private.activity.lock").exists()
+def test_construction_writes_nothing_and_initialization_provisions_the_sibling_fence(tmp_path):
+    storage = PrivateStorage(tmp_path / "private")
+    lock = storage.root.with_name(".private.activity.lock")
+    assert not storage.root.exists() and not lock.exists()
+    storage.initialize()
+    assert lock.is_file()
     assert {item.name for item in storage.root.iterdir()} == {"objects", "tmp"}
 
 
@@ -58,8 +62,15 @@ def test_bounded_initialization_aborts_before_permission_changes(storage, monkey
     def unexpected_permission_change(*args, **kwargs):
         pytest.fail("A budget-exhausted preflight must not change permissions")
 
+    restrict_permissions = storage_module._restrict_permissions
+
+    def restrict_only_the_sibling_fence(path, **kwargs):
+        if path != storage.root.with_name(".private.activity.lock"):
+            unexpected_permission_change()
+        restrict_permissions(path, **kwargs)
+
     monkeypatch.setattr(storage_module, "_restrict_directory", unexpected_permission_change)
-    monkeypatch.setattr(storage_module, "_restrict_permissions", unexpected_permission_change)
+    monkeypatch.setattr(storage_module, "_restrict_permissions", restrict_only_the_sibling_fence)
     with pytest.raises(StorageError, match="entry budget"):
         storage.initialize(max_entries=3)
     assert {path: path.read_bytes() for path in before} == before
@@ -125,7 +136,8 @@ def test_context_error_releases_lock_and_preserves_permanent_lock_identity(stora
 
 
 @pytest.mark.parametrize("unexpected", ["directory", "hardlink"])
-def test_activity_rejects_unexpected_lock_object_without_removing_it(storage, tmp_path, unexpected):
+def test_activity_rejects_unexpected_lock_object_without_removing_it(tmp_path, unexpected):
+    storage = PrivateStorage(tmp_path / "private")
     lock = storage.root.with_name(".private.activity.lock")
     if unexpected == "directory":
         lock.mkdir()
@@ -297,8 +309,11 @@ def test_temporary_removal_error_is_sanitized(storage, monkeypatch):
 
 
 def test_lock_mode_and_inventory_kind_are_validated(storage):
+    lock = storage.root.with_name(".private.activity.lock")
+    before = lock.stat()
     with pytest.raises(ValueError):
         with storage.activity(exclusive="yes"):
             pass
-    assert not storage.root.with_name(".private.activity.lock").exists()
+    after = lock.stat()
+    assert (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino)
     assert storage_module.StorageBusy is StorageBusy

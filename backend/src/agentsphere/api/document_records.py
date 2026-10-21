@@ -14,6 +14,7 @@ from agentsphere.models import Document, DocumentFile, DocumentStatus
 from agentsphere.permissions import Access, Editor
 from agentsphere.schemas.documents import (
     DocumentMetadata,
+    DocumentMetadataFields,
     DocumentPage,
     DocumentRead,
     DocumentUpdate,
@@ -28,7 +29,7 @@ router = APIRouter(
 Configuration = Annotated[Settings, Depends(get_settings)]
 
 
-def check_size(document: DocumentMetadata, settings: Settings) -> None:
+def check_size(document: DocumentMetadataFields, settings: Settings) -> None:
     if document.size_bytes > settings.max_upload_bytes:
         raise HTTPException(
             status_code=413,
@@ -140,7 +141,12 @@ def update_document(
     }
     current.update({key: value for key, value in changes.items() if key != "status"})
     try:
-        metadata = DocumentMetadata.model_validate(current)
+        # Tightening new-input rules must not strand a historical record. An
+        # unchanged name can still be archived, restored or otherwise updated.
+        metadata_type = (
+            DocumentMetadataFields if current["filename"] == document.filename else DocumentMetadata
+        )
+        metadata = metadata_type.model_validate(current)
     except ValidationError as error:
         detail = [
             {"loc": ["body", *item["loc"]], "msg": item["msg"], "type": item["type"]}

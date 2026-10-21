@@ -254,7 +254,9 @@ def test_concurrent_duplicate_requests_do_not_create_orphan_objects(
         responses = list(
             pool.map(lambda client: send_file(client, headers=headers), (upload_client, second))
         )
-    assert [response.status_code for response in responses] == [202, 202]
+    assert [response.status_code for response in responses] == [202, 202], [
+        response.text for response in responses
+    ]
     assert responses[0].json()["document"] == responses[1].json()["document"]
     assert sorted(response.json()["replayed"] for response in responses) == [False, True]
     with Session(db_env) as session:

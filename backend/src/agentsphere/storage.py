@@ -10,8 +10,9 @@ import os
 import re
 import stat
 import subprocess
+import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -454,28 +455,49 @@ class PrivateStorage:
         Existing objects must follow our layout. No files are overwritten or
         removed. Restrict each child's permissions: Windows checks child ACLs
         independently, so a private parent alone cannot protect restored files.
+        An exclusive activity fence keeps live uploads out of this inventory.
+        Only the permanent sibling lock is provisioned before the tree preflight.
         """
         if max_entries is not None and (type(max_entries) is not int or max_entries < 1):
             raise ValueError("Storage initialization requires a positive entry budget.")
         self._initialized = False
         try:
-            self._directories(self.root.parent)
-            self._directories(self.root, create_below=self.root)
-            directories, files = self._managed_tree(max_entries=max_entries)
-            # Validate a mistaken root before changing ACLs/modes or adding
-            # managed directories to unrelated existing content.
-            _restrict_directory(self.root)
-            for name in ("objects", "tmp"):
-                directory = self.root / name
-                self._directories(directory, create_below=self.root)
-                _restrict_directory(directory)
-            for directory in directories:
-                _restrict_directory(directory)
-            for file in files:
-                _restrict_permissions(file, directory=False)
+            with self._initialization_activity():
+                self._directories(self.root.parent)
+                self._directories(self.root, create_below=self.root)
+                directories, files = self._managed_tree(max_entries=max_entries)
+                # Validate a mistaken root before changing its ACLs/modes or
+                # adding managed directories to unrelated existing content.
+                _restrict_directory(self.root)
+                for name in ("objects", "tmp"):
+                    directory = self.root / name
+                    self._directories(directory, create_below=self.root)
+                    _restrict_directory(directory)
+                for directory in directories:
+                    _restrict_directory(directory)
+                for file in files:
+                    _restrict_permissions(file, directory=False)
             self._initialized = True
         except (OSError, subprocess.SubprocessError, KeyError, IndexError):
             raise StorageError("Could not initialize private storage.") from None
+
+    @contextmanager
+    def _initialization_activity(self) -> Iterator[None]:
+        # Initialization runs in a request thread pool or the separate worker,
+        # never on the ASGI event loop. Normal maintenance remains nonblocking.
+        with ExitStack() as stack:
+            deadline = time.monotonic() + 2
+            while True:
+                try:
+                    stack.enter_context(self.activity(exclusive=True))
+                except StorageBusy:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    time.sleep(min(remaining, 0.01))
+                else:
+                    break
+            yield
 
     def _managed_tree(self, *, max_entries: int | None = None) -> tuple[list[Path], list[Path]]:
         scanned = 0

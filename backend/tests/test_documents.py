@@ -91,6 +91,26 @@ def test_invalid_filenames(client, metadata, filename):
     assert response.json()["detail"][0]["loc"] == ["body", "filename"]
 
 
+@pytest.mark.parametrize(
+    "filename",
+    ["CON .txt", "COM\u00b9.txt", "LPT\u00b2.txt", "lpt\u00b3.txt", "CONIN$.txt", "CONOUT$.txt"],
+)
+def test_windows_device_aliases_are_rejected_with_matching_content_type(client, filename):
+    response = client.post(
+        URL, json={"filename": filename, "content_type": "text/plain", "size_bytes": 1}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "filename"]
+
+
+@pytest.mark.parametrize("filename", ["CONSOLE.txt", "COM0.txt", "COM10.txt", "research .txt"])
+def test_non_device_names_remain_valid(client, filename):
+    response = client.post(
+        URL, json={"filename": filename, "content_type": "text/plain", "size_bytes": 1}
+    )
+    assert response.status_code == 200
+
+
 @pytest.mark.parametrize("content_type", ["text/plain", "image/png", "", None, 42])
 def test_invalid_or_mismatched_content_type(client, metadata, content_type):
     metadata["content_type"] = content_type

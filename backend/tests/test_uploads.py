@@ -99,6 +99,14 @@ def test_markdown_browser_plaintext_mime_and_unicode_filename(storage):
     assert metadata.content_type == "text/markdown"
 
 
+@pytest.mark.parametrize(
+    "filename",
+    ["CON .txt", "COM\u00b9.txt", "LPT\u00b2.txt", "lpt\u00b3.txt", "CONIN$.txt", "CONOUT$.txt"],
+)
+def test_windows_device_aliases_are_rejected_before_private_writes(storage, filename):
+    assert_rejected(storage, multipart(filename=filename), 422)
+
+
 def test_inclusive_ten_million_byte_file_limit(storage):
     data = b"a" * 10_000_000
     content, metadata = intake(storage, multipart(data))

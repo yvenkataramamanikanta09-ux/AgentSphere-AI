@@ -5,7 +5,7 @@ import { ApiError } from '../../api/client'
 import { documentApi } from '../../api/documents'
 import type { DocumentRecord } from '../../api/documents'
 import { documentError } from './errors'
-import { inferredContentType, metadataSchema } from './validation'
+import { inferredContentType, metadataSchemaFor } from './validation'
 import type { MetadataValues } from './validation'
 
 interface Props {
@@ -23,7 +23,7 @@ export function DocumentForm({ workspaceId, record, fileBacked = false, disabled
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const { register, setValue, setError, handleSubmit, formState: { errors, isSubmitting } } = useForm<MetadataValues>({
-    resolver: zodResolver(metadataSchema),
+    resolver: zodResolver(metadataSchemaFor(record?.filename)),
     defaultValues: { filename: record?.filename ?? '', content_type: record?.content_type ?? 'application/pdf', size_bytes: record?.size_bytes },
   })
 

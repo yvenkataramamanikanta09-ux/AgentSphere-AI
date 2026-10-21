@@ -19,9 +19,16 @@ SUPPORTED_CONTENT_TYPES = {
 RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {
     f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
 }
+WINDOWS_DEVICE_NAMES = (
+    RESERVED_NAMES
+    | {"CONIN$", "CONOUT$"}
+    | {f"{prefix}{number}" for prefix in ("COM", "LPT") for number in "\u00b9\u00b2\u00b3"}
+)
 
 
-class DocumentMetadata(BaseModel):
+class DocumentMetadataFields(BaseModel):
+    """Shared fields retain the validation policy used by existing stored records."""
+
     model_config = ConfigDict(extra="forbid")
 
     filename: str = Field(strict=True, min_length=1, max_length=255, examples=["proposal.pdf"])
@@ -59,13 +66,26 @@ class DocumentMetadata(BaseModel):
         return self
 
 
+class DocumentMetadata(DocumentMetadataFields):
+    """New filenames must also avoid Windows device aliases in downloads."""
+
+    @field_validator("filename")
+    @classmethod
+    def validate_portable_filename(cls, value: str) -> str:
+        # Windows recognizes spaces before the first dot and superscript port
+        # numbers as device aliases. Private object paths remain UUIDs regardless.
+        if value.split(".", 1)[0].rstrip(" ").upper() in WINDOWS_DEVICE_NAMES:
+            raise ValueError("Reserved device names are not valid filenames.")
+        return value
+
+
 class DocumentValidationResponse(BaseModel):
     valid: Literal[True] = True
     document: DocumentMetadata
     max_upload_bytes: int
 
 
-class DocumentRead(DocumentMetadata):
+class DocumentRead(DocumentMetadataFields):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID

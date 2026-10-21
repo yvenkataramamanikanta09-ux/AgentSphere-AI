@@ -1,10 +1,13 @@
-# AgentSphere AI frontend — Module 5, Stage 4
+# AgentSphere AI frontend — Module 5
 
 React + TypeScript authentication UI connected to the real FastAPI Module 3 API.
 The app contains registration, login, session restoration, logout, and the
 workspace dashboard and workspace-scoped document library. It supports private
 file uploads, processing status, plain-text section previews, and authorized
 original downloads through the existing Module 5 API and separate worker. See
+[the final Module 5 handover](../docs/MODULE5_STAGE5.md) for current verification,
+security boundaries, operational recovery, and the unexecuted migration checklist.
+See
 [the Module 5 frontend guide](../docs/MODULE5_STAGE4.md) for the isolated upload
 environment, workflow, tests, safety guarantees, and limitations. See
 [the Stage 3 guide](../docs/MODULE4_STAGE3.md) for document operations, permissions,

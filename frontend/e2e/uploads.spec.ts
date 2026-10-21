@@ -37,6 +37,8 @@ const uploads = `${collection}/uploads`
 const mime: Record<string, string> = {
   txt: 'text/plain', md: 'text/markdown', pdf: 'application/pdf', malformed: 'application/pdf',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  malformed_docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  invalid_txt: 'text/plain', invalid_md: 'text/markdown',
 }
 
 function control(action: 'pause' | 'resume') {
@@ -79,6 +81,14 @@ async function submit(page: Page, endpoint = uploads): Promise<Upload> {
   const response = await accepted
   expect(response.status()).toBe(202)
   return await response.json() as Upload
+}
+
+async function documentIds(page: Page): Promise<string[]> {
+  const response = await page.request.get(`${collection}?limit=100`)
+  expect(response.status()).toBe(200)
+  const body = await response.json() as { items: { id: string }[]; has_more: boolean }
+  expect(body.has_more).toBe(false)
+  return body.items.map(({ id }) => id).sort()
 }
 
 async function ready(page: Page, body: Upload) {
@@ -223,19 +233,74 @@ test('archived originals remain readable; deletion cleans the private original a
   expect((await replay.json()).detail).toContain('deleted')
 })
 
-test('malformed PDF is accepted into the queue then fails real processing with preview and original blocked', async ({ page }) => {
-  await login(page)
-  await choose(page, 'malformed')
-  const body = await submit(page)
-  const processing = page.getByRole('region', { name: 'File processing', exact: true })
-  await expect(processing).toContainText('Processing failed', { timeout: 20_000 })
-  await expect(page.getByRole('button', { name: 'Preview extracted text', exact: true })).toBeDisabled()
-  await expect(page.getByRole('button', { name: 'Download original', exact: true })).toBeDisabled()
-  const metadata = await (await page.request.get(`${collection}/${body.document.id}/file`)).json()
-  expect(metadata).toMatchObject({ processing_status: 'failed', download_available: false, error_code: 'invalid_pdf' })
-  expect((await page.request.get(`${collection}/${body.document.id}/sections`)).status()).toBe(409)
-  expect((await page.request.get(`${collection}/${body.document.id}/download`)).status()).toBe(409)
-})
+for (const [kind, label, code] of [
+  ['malformed', 'PDF', 'invalid_pdf'],
+  ['malformed_docx', 'DOCX', 'invalid_docx'],
+]) {
+  test(`malformed ${label} is accepted into the queue then fails real processing with preview and original blocked`, async ({ page }) => {
+    await login(page)
+    await choose(page, kind)
+    const body = await submit(page)
+    const processing = page.getByRole('region', { name: 'File processing', exact: true })
+    await expect(processing).toContainText('Processing failed', { timeout: 20_000 })
+    await expect(page.getByRole('button', { name: 'Preview extracted text', exact: true })).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Download original', exact: true })).toBeDisabled()
+    const metadata = await (await page.request.get(`${collection}/${body.document.id}/file`)).json()
+    expect(metadata).toMatchObject({ processing_status: 'failed', download_available: false, error_code: code })
+    expect((await page.request.get(`${collection}/${body.document.id}/sections`)).status()).toBe(409)
+    expect((await page.request.get(`${collection}/${body.document.id}/download`)).status()).toBe(409)
+    expect(inspect(body.document.id)).toMatchObject({ section_count: 0 })
+  })
+}
+
+for (const kind of ['invalid_txt', 'invalid_md']) {
+  test(`${kind} is rejected by the real upload API without creating a visible record`, async ({ page }) => {
+    await login(page)
+    const before = await documentIds(page)
+    await choose(page, kind)
+    const rejected = page.waitForResponse((response) => response.url().endsWith(uploads)
+      && response.request().method() === 'POST')
+    await page.getByRole('button', { name: 'Upload file', exact: true }).click()
+    expect((await rejected).status()).toBe(422)
+    const alert = page.getByRole('alert')
+    await expect(alert).toHaveText('The file or upload details were rejected. Check its filename, format, and contents before trying again.')
+    await expect(alert).toBeFocused()
+    await expect(page.getByRole('region', { name: 'File processing', exact: true })).toHaveCount(0)
+    expect(await documentIds(page)).toEqual(before)
+  })
+}
+
+for (const [label, name, size, message] of [
+  ['unsupported', 'generated-unsupported.exe', 20, 'Use .pdf, .docx, .txt, .md, or .markdown.'],
+  ['empty', 'generated-empty.txt', 0, 'Choose a file that is not empty.'],
+  ['oversized', 'generated-oversized.txt', 10_000_001, 'Choose a file of 10,000,000 bytes or fewer (10 MB).'],
+] as const) {
+  test(`${label} file selection is rejected accessibly before any upload is sent`, async ({ page }) => {
+    await login(page)
+    const before = await documentIds(page)
+    let posted = 0
+    page.on('request', (request) => { if (isUpload(request)) posted++ })
+    await page.getByRole('button', { name: 'Upload document', exact: true }).click()
+    const chooser = page.getByLabel('Choose document', { exact: true })
+    await chooser.setInputFiles({ name, mimeType: 'application/octet-stream', buffer: Buffer.alloc(size, 65) })
+    await expect(page.getByRole('alert')).toHaveText(message)
+    await expect(page.getByRole('alert')).toBeFocused()
+    await expect(chooser).toHaveAttribute('aria-invalid', 'true')
+    await expect(page.getByRole('button', { name: 'Upload file', exact: true })).toBeDisabled()
+    expect(await documentIds(page)).toEqual(before)
+    expect(posted).toBe(0)
+    if (label === 'unsupported') {
+      // Bypassing the chooser still reaches authoritative backend format checks.
+      const csrf = await (await page.request.get('/api/v1/auth/csrf')).json()
+      const denied = await page.request.post(uploads, {
+        headers: { Origin: origin, 'X-CSRF-Token': csrf.csrf_token, 'Idempotency-Key': randomUUID() },
+        multipart: { file: { name, mimeType: 'application/octet-stream', buffer: Buffer.alloc(size, 65) } },
+      })
+      expect(denied.status()).toBe(415)
+      expect(await documentIds(page)).toEqual(before)
+    }
+  })
+}
 
 test('worker unavailability leaves accepted uploads queued until the separate worker resumes', async ({ page }) => {
   await login(page)
