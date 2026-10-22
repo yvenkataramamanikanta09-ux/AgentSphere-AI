@@ -1,4 +1,4 @@
-# AgentSphere AI backend — Module 5 and Module 6 Stage 1
+# AgentSphere AI backend — Module 5 and Module 6 foundations
 
 FastAPI provides cookie-based authentication, workspace permissions, document
 metadata CRUD, private multipart uploads, processing status, extracted sections,
@@ -15,6 +15,23 @@ validated data/configuration contracts only. Code migration head is now **0004**
 No tokenizer, embedding model, Qdrant service, vector worker, semantic-search
 route, or search interface is installed or started by this foundation. Keep
 `SEARCH_ENABLED=false` and `SEARCH_INDEXING_ENABLED=false`.
+
+[Module 6 Stage 2](../docs/MODULE6_STAGE2.md) adds standalone source-preserving
+chunking and local CPU embeddings. It does not populate search tables or enable
+search. The optional `embeddings` dependency group and explicit public artifact
+provisioning are separate from normal API startup:
+
+```powershell
+poetry install --with lint,embeddings
+# One-time public MIT model download into the ignored local model cache:
+.\.venv\Scripts\python.exe scripts/prepare_local_embeddings.py --download-public-model
+# Offline synthetic smoke tests and local CPU measurements (no database):
+.\.venv\Scripts\python.exe scripts/verify_local_embeddings.py
+```
+
+Runtime requires the exact verified local snapshot and never downloads a model,
+sends document text to a provider, or substitutes fake embeddings. The complete
+backend suite includes tensor tests and therefore requires the `embeddings` group.
 
 ## Existing local development environment
 

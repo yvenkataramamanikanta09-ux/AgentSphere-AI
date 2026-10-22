@@ -35,6 +35,12 @@ class SearchSettings(BaseSettings):
     search_trust_remote_code: bool = False
     search_chunk_tokens: int = Field(default=350, ge=1, le=480)
     search_chunk_overlap_tokens: int = Field(default=50, ge=0, le=479)
+    search_chunk_max_sections: int = Field(default=10_000, ge=1, le=10_000)
+    search_chunk_max_characters: int = Field(default=2_000_000, ge=1, le=2_000_000)
+    search_chunk_max_tokenizer_calls: int = Field(default=100_000, ge=1, le=100_000)
+    search_chunk_timeout_seconds: float = Field(default=60, gt=0, le=120, allow_inf_nan=False)
+    search_embedding_cpu_threads: int = Field(default=2, ge=1, le=8)
+    search_embedding_max_batch_characters: int = Field(default=128_000, ge=1, le=2_048_000)
     search_qdrant_url: str | None = None
     search_qdrant_allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "::1", "qdrant")
     search_allow_insecure_local_qdrant: bool = False
@@ -172,4 +178,29 @@ class SearchSettings(BaseSettings):
             dimensions=self.search_embedding_dimensions,
             chunk_tokens=self.search_chunk_tokens,
             chunk_overlap_tokens=self.search_chunk_overlap_tokens,
+        )
+
+    @property
+    def search_chunking_limits(self):
+        """Pure local limits; reading them performs no model or service I/O."""
+        from agentsphere.chunking import ChunkingLimits
+
+        return ChunkingLimits(
+            max_sections=self.search_chunk_max_sections,
+            max_document_characters=self.search_chunk_max_characters,
+            max_chunks=self.search_max_chunks_per_document,
+            max_tokenizer_calls=self.search_chunk_max_tokenizer_calls,
+            timeout_seconds=self.search_chunk_timeout_seconds,
+        )
+
+    @property
+    def search_embedding_limits(self):
+        from agentsphere.embeddings import EmbeddingLimits
+
+        return EmbeddingLimits(
+            batch_size=self.search_batch_size,
+            max_total_characters=self.search_embedding_max_batch_characters,
+            max_query_tokens=self.search_query_max_tokens,
+            max_query_characters=self.search_query_max_characters,
+            cpu_threads=self.search_embedding_cpu_threads,
         )

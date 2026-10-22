@@ -32,6 +32,19 @@ optional = true
 [tool.poetry.group.lint.dependencies]
 ruff = ">=0.9,<1.0"
 
+# Standalone local inference is optional; the metadata API needs none of these.
+[tool.poetry.group.embeddings]
+optional = true
+
+[tool.poetry.group.embeddings.dependencies]
+transformers = "5.20.2"
+torch = { version = "2.14.1+cpu", source = "pytorch-cpu" }
+
+[[tool.poetry.source]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
+
 [build-system]
 requires = ["poetry-core>=2.0,<3.0"]
 build-backend = "poetry.core.masonry.api"
