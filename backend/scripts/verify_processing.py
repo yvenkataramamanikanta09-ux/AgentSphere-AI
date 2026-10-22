@@ -142,7 +142,7 @@ def main():
                 "AUTH_RATE_LIMIT_KEY": secrets.token_urlsafe(48),
             }
             with (root / "process.log").open("w", encoding="utf-8") as log:
-                for arguments in (("upgrade", "0003"), ("check",)):
+                for arguments in (("upgrade", "head"), ("check",)):
                     subprocess.run(
                         module_command("alembic", *arguments),
                         cwd=BACKEND_DIR,

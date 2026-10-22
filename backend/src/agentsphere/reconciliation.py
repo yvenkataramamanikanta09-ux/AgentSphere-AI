@@ -29,8 +29,9 @@ def _healthy(db):
     if db.scalar(text("SHOW transaction_isolation")) != "read committed":
         raise ValueError("Reconciliation requires READ COMMITTED isolation.")
     require_storage_schema(db)
-    if db.scalar(text("SELECT version_num FROM alembic_version")) != "0003":
-        raise ValueError("Reconciliation requires schema revision 0003.")
+    # 0004 is additive; the original-file reconciliation algorithm is unchanged.
+    if db.scalar(text("SELECT version_num FROM alembic_version")) not in {"0003", "0004"}:
+        raise ValueError("Reconciliation requires schema revision 0003 or 0004.")
 
 
 def reconcile(

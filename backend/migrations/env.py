@@ -2,6 +2,7 @@
 
 from alembic import context
 
+from agentsphere import search_models  # noqa: F401 -- register additive metadata for Alembic
 from agentsphere.config import Settings
 from agentsphere.database import build_engine
 from agentsphere.models import Base

@@ -81,7 +81,7 @@ def main() -> int:
                 environment["PRIVATE_STORAGE_ROOT"] = str(Path(temporary) / "private")
                 environment["DATABASE_URL"] = test_url
                 environment["TEST_DATABASE_URL"] = test_url
-                for arguments in (("alembic", "upgrade", "0003"), ("alembic", "check")):
+                for arguments in (("alembic", "upgrade", "head"), ("alembic", "check")):
                     result = subprocess.run(
                         [sys.executable, "-m", *arguments],
                         cwd=BACKEND,

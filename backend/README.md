@@ -1,4 +1,4 @@
-# AgentSphere AI backend — Module 5
+# AgentSphere AI backend — Module 5 and Module 6 Stage 1
 
 FastAPI provides cookie-based authentication, workspace permissions, document
 metadata CRUD, private multipart uploads, processing status, extracted sections,
@@ -9,6 +9,12 @@ Start with the [Module 5 handover](../docs/MODULE5_STAGE5.md) for architecture,
 security boundaries, verification results, recovery, and the migration checklist.
 The [Module 3 guide](../docs/MODULE3.md) explains authentication and permissions;
 the [Module 2 guide](../docs/MODULE2.md) explains SQLAlchemy and migrations.
+
+[Module 6 Stage 1](../docs/MODULE6_STAGE1.md) adds PostgreSQL search schema and
+validated data/configuration contracts only. Code migration head is now **0004**.
+No tokenizer, embedding model, Qdrant service, vector worker, semantic-search
+route, or search interface is installed or started by this foundation. Keep
+`SEARCH_ENABLED=false` and `SEARCH_INDEXING_ENABLED=false`.
 
 ## Existing local development environment
 
@@ -39,7 +45,9 @@ requests there do not match the frontend origin in this configuration.
 Install dependencies with `poetry install --with lint` when setting up a fresh checkout.
 The existing `.venv\Scripts\python.exe` is used below. These drivers require the
 existing local cluster and its ignored configuration; they create their own
-databases, apply 0003 only there, and allocate temporary private storage.
+databases, apply code head **0004 only there**, and allocate temporary private
+storage. Explicit legacy migration tests also cover populated 0002 and 0003
+schemas. These drivers never upgrade the normal development database.
 
 ```powershell
 # Complete backend suite, including clean/populated migration tests:
@@ -58,10 +66,13 @@ Do not publish reports containing generated action labels. An externally killed
 harness can leave disposable resources; investigate their exact ownership before
 cleanup. Do not issue wildcard database or storage deletion commands.
 
-## Worker, only for an approved 0003 environment
+## Worker, only for an approved 0003 or 0004 environment
 
 After a separate backup/migration approval, API and worker must use the same
-0003 database and absolute private storage root. Never mount that root as static
+0003 or 0004 database and absolute private storage root. The Module 6 compatibility
+changes accept both known revisions at worker startup and in the reconciliation
+health check; extraction and file-cleanup algorithms are unchanged. It does not
+create search sources or consume vector jobs. Never mount that root as static
 content. See `.env.example` for bounded extraction settings and secure defaults.
 
 ```powershell

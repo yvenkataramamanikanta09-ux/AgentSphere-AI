@@ -125,7 +125,7 @@ def seed_module4(connection):
 def test_clean_database_upgrade_has_empty_storage_tables_and_matches_models(migration_connection):
     connection = migration_connection
     command.upgrade(migration_config(connection), "head")
-    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
+    assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0004"
     assert NEW_TABLES <= set(inspect(connection).get_table_names())
     for table in NEW_TABLES:
         assert connection.scalar(text(f"SELECT count(*) FROM {table}")) == 0
@@ -151,12 +151,12 @@ def test_populated_module4_upgrade_and_empty_downgrade_preserve_every_legacy_val
         for column in inspect(connection).get_columns("documents")
     ] == document_columns
     assert connection.scalar(text("SELECT count(*) FROM document_files")) == 0
-    command.check(config)
     command.downgrade(config, "0002")
     assert legacy_snapshot(connection) == before
     assert NEW_TABLES.isdisjoint(inspect(connection).get_table_names())
     command.upgrade(config, "head")
     assert legacy_snapshot(connection) == before
+    command.check(config)
 
 
 @pytest.mark.parametrize("table", sorted(NEW_TABLES))

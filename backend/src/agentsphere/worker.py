@@ -151,10 +151,11 @@ def main(argv=None):
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
-        # Fail before storage initialization on 0002; never migrate from the worker.
+        # 0004 is additive; extraction still uses only the 0003 tables and jobs.
+        # Fail before storage initialization on older/unknown schemas; never migrate.
         with engine.connect() as db:
-            if db.scalar(text("SELECT version_num FROM alembic_version")) != "0003":
-                raise SystemExit("Worker requires the separately approved 0003 migration.")
+            if db.scalar(text("SELECT version_num FROM alembic_version")) not in {"0003", "0004"}:
+                raise SystemExit("Worker requires the separately approved 0003 or 0004 migration.")
         storage = PrivateStorage(settings.private_storage_root)
         storage.initialize(max_entries=settings.reconciliation_max_entries)
         if args.reconcile:

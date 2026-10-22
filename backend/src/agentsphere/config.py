@@ -6,17 +6,18 @@ from urllib.parse import urlsplit
 
 from fastapi import Request
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
+from agentsphere.search_config import SearchSettings
 from agentsphere.storage import validate_storage_root
 
 # Resolve relative to this file so starting from another directory is safe.
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
-class Settings(BaseSettings):
+class Settings(SearchSettings):
     model_config = SettingsConfigDict(
         env_file=BACKEND_DIR / ".env",
         env_file_encoding="utf-8",
